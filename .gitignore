@@ -32,6 +32,17 @@
 !INSTALL
 !README.rst
 
+# Custom optimization project files
+!/tools
+!BUILD_INSTRUCTIONS.md
+!NEXT_STEPS.md
+!OPTIMIZATION_IMPLEMENTATION_GUIDE.md
+!OPTIMIZATION_REPORT.md
+!PERFORMANCE_TEST_RESULTS.md
+!build_optimized.bat
+!run_build.bat
+!configure_and_build.bat
+
 # Exclude lock files
 *.lock.json
 
