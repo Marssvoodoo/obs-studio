@@ -710,6 +710,9 @@ void OBSBasic::ActivateProfile(const OBSProfile &profile, bool reset)
 #endif
 	}
 
+	// Ensure defaults and updates are saved to disk
+	activeConfiguration.SaveSafe("tmp");
+
 	RefreshProfiles();
 
 	UpdateTitleBar();
