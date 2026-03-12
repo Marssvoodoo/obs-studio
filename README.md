@@ -1,0 +1,72 @@
+# OBS Studio Claude Code Enhanced
+
+A performance-optimized and security-hardened fork of [OBS Studio](https://obsproject.com), based on upstream version **32.1.0**.
+
+---
+
+## What's Changed
+
+### Performance Optimizations
+
+- **SIMD-Optimized Audio Pipeline** — SSE2/AVX accelerated audio mixing with non-temporal stores for large buffers, reducing CPU cache pressure during encoding
+- **Multi-Threaded Audio Rendering** — Lock-free thread pool for parallel audio source rendering with automatic scaling based on source count
+- **Audio Memory Pooling** — Pre-allocated buffer pools for audio render and output buffers, eliminating per-frame allocations
+- **Optimized Video Frame Copy** — SIMD-accelerated `copy_video_plane_optimized()` with prefetching and non-temporal stores for planes >256KB
+- **Skip Unused Source Ticking** — Sources not included in any active mix are no longer ticked, reducing idle CPU usage
+- **Canvas Enable/Disable** — Explicit API to disable inactive canvases, preventing unnecessary rendering work
+- **Stop Event Prioritization** — WaitForMultipleObjects now prioritizes stop events over processing, improving shutdown responsiveness
+
+### Security Hardening
+
+- **Integer Overflow Guards** — Overflow checks on all buffer size calculations in audio pipeline capacity doubling, video frame plane sizing, GPU conversion width multiplications, and linesize computations
+- **Thread Safety** — Atomic operations for shared thread pool state (`num_jobs`), NULL guards against spurious wakeups in worker threads
+- **SIMD Copy Validation** — Stride and dimension validation before all SIMD memory copy operations to prevent out-of-bounds access
+- **Plugin Path Hardening** — Replaced `GetEnvironmentVariableA("ProgramFiles")` with `SHGetKnownFolderPath(FOLDERID_ProgramFiles)` to prevent environment variable manipulation attacks
+- **Path Traversal Protection** — Validation on `OBS_PLUGINS_PATH`, `OBS_PLUGINS_DATA_PATH`, and `OBS_PERF_EXPORT_CSV` environment variables, rejecting `..` traversal sequences and UNC paths
+- **Pool Destruction Safety** — Documented and verified correct ordering of source teardown before audio pool destruction during shutdown
+
+### Cherry-Picked Upstream Fixes
+
+- **NVENC Resource Destruction** — Fix resource destruction order (PR #13105)
+- **Integer Overflow Fixes** — Fix integer overflow in D3D11, OpenGL, and image file texture size calculations (PR #13184)
+- **Windows IPC Pipe** — Adjustments for windows ipc-pipe handling (PR #13184)
+- **Plugin Manager Safe Mode** — Improved safe mode behavior for plugin manager
+- **Scene List Events** — Only send frontend event when scene list actually changes
+- **Process Pipe FD Management** — Fix fd double-close and leak in POSIX process pipes
+- **obs-websocket** — Updated to version 5.7.2
+
+### Plugins & Tools
+
+- **In-Game Stats Overlay Plugin** (`obs-overlay`) — Real-time performance stats overlay with D3D11 colorspace conversion support
+- **Program Files Plugin Discovery** — Automatically discovers third-party plugins from `C:\Program Files\obs-studio\obs-plugins\64bit\` with module deduplication
+- **Performance Monitoring Tools** — PowerShell scripts for automated benchmarking (`obs-run-scenarios.ps1`) and live performance monitoring (`obs-perf-monitor.ps1`)
+- **CSV Performance Export** — Set `OBS_PERF_EXPORT_CSV` environment variable to continuously export performance metrics during sessions
+
+---
+
+## Files Modified
+
+| Area | Files |
+|------|-------|
+| Audio Pipeline | `libobs/obs-audio.c`, `libobs/obs-audio-optimized.c`, `libobs/obs-audio-threaded.c`, `libobs/obs-audio-threaded.h` |
+| Video Pipeline | `libobs/obs-video.c`, `libobs/media-io/video-frame.c`, `libobs/media-io/video-frame.h` |
+| Core | `libobs/obs.c`, `libobs/obs.h`, `libobs/obs-internal.h` |
+| Frontend | `frontend/widgets/OBSBasic.cpp` |
+| Plugins | `plugins/obs-overlay/` |
+| Tools | `tools/obs-perf-monitor.ps1`, `tools/obs-run-scenarios.ps1` |
+
+## Building
+
+```bash
+cmake --build "build" --config Release --parallel 8
+```
+
+Output binary: `build/rundir/Release/bin/64bit/obs64.exe`
+
+## Base Version
+
+Based on [obsproject/obs-studio](https://github.com/obsproject/obs-studio) tag `32.1.0` (upstream master).
+
+## License
+
+GNU General Public License v2 (or any later version) — same as upstream OBS Studio. See [COPYING](COPYING) for details.
