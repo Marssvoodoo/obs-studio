@@ -440,6 +440,7 @@ struct obs_core_video {
 extern void add_ready_encoder_group(obs_encoder_t *encoder);
 
 struct audio_monitor;
+struct audio_render_job;
 
 struct obs_core_audio {
 	audio_t *audio;
@@ -476,6 +477,19 @@ struct obs_core_audio {
 	 * NULL means parallel render is disabled (single-source scenes,
 	 * or systems with only one logical core).                        */
 	struct obs_audio_threadpool *render_pool;
+	struct audio_job *render_job_batch;
+	struct audio_render_job *render_jobs;
+	size_t render_jobs_capacity;
+	bool graph_hooks_connected;
+	volatile long graph_dirty;
+	volatile long graph_rebuilds;
+	volatile long callback_last_ns;
+	volatile long callback_avg_ns;
+	volatile long callback_max_ns;
+	volatile long callback_samples;
+	volatile long parallel_ticks;
+	volatile long serial_ticks;
+	volatile long peak_parallel_jobs;
 };
 
 /* user sources, output channels, and displays */

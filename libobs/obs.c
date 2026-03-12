@@ -896,6 +896,13 @@ static void apply_monitoring_deduplication(void *ignored, calldata_t *cd)
 	obs_queue_task(OBS_TASK_AUDIO, set_monitoring_duplication_source, src, false);
 }
 
+static void mark_audio_graph_dirty(void *ignored, calldata_t *cd)
+{
+	UNUSED_PARAMETER(ignored);
+	UNUSED_PARAMETER(cd);
+	os_atomic_set_long(&obs->audio.graph_dirty, 1);
+}
+
 static void set_audio_thread(void *unused);
 
 static bool obs_init_audio(struct audio_output_info *ai)
@@ -916,9 +923,35 @@ static bool obs_init_audio(struct audio_output_info *ai)
 	audio->monitoring_device_name = bstrdup("Default");
 	audio->monitoring_device_id = bstrdup("default");
 	audio->monitoring_duplicating_source = NULL;
+	os_atomic_set_long(&audio->graph_dirty, 1);
 
 	signal_handler_add(obs->signals, "void deduplication_changed(ptr source)");
 	signal_handler_connect(obs->signals, "deduplication_changed", apply_monitoring_deduplication, NULL);
+	if (!audio->graph_hooks_connected) {
+		static const char *graph_signals[] = {
+			"source_create",
+			"source_create_canvas",
+			"source_remove",
+			"source_destroy",
+			"source_activate",
+			"source_deactivate",
+			"source_audio_activate",
+			"source_audio_deactivate",
+			"source_filter_add",
+			"source_filter_remove",
+			"channel_change",
+			"canvas_create",
+			"canvas_remove",
+			"canvas_video_reset",
+			"video_reset",
+			NULL,
+		};
+
+		for (size_t i = 0; graph_signals[i]; i++)
+			signal_handler_connect(obs->signals, graph_signals[i],
+					       mark_audio_graph_dirty, NULL);
+		audio->graph_hooks_connected = true;
+	}
 
 	errorcode = audio_output_open(&audio->audio, ai);
 	if (errorcode == AUDIO_OUTPUT_SUCCESS) {
@@ -960,13 +993,18 @@ static void obs_free_audio(void)
 	struct obs_audio_pool *output_buf_pool = audio->output_buf_pool;
 	struct obs_audio_pool *mix_buf_pool = audio->mix_buf_pool;
 	struct obs_audio_threadpool *render_pool = audio->render_pool;
+	bool graph_hooks_connected = audio->graph_hooks_connected;
 	const bool destroying_core_data = !obs->data.valid;
 	if (audio->audio)
 		audio_output_close(audio->audio);
 
 	deque_free(&audio->buffered_timestamps);
+	for (size_t i = 0; i < audio->render_order.num; i++)
+		obs_source_release(audio->render_order.array[i]);
 	da_free(audio->render_order);
 	da_free(audio->root_nodes);
+	bfree(audio->render_job_batch);
+	bfree(audio->render_jobs);
 
 	da_free(audio->monitors);
 	bfree(audio->monitoring_device_name);
@@ -977,7 +1015,12 @@ static void obs_free_audio(void)
 
 	/* The global audio pools and render thread pool outlive audio resets.
 	 * Existing sources keep pointers into these allocations, so they may
-	 * only be destroyed once source data has been torn down. */
+	 * only be destroyed once source data has been torn down.
+	 *
+	 * SAFETY: destroying_core_data is true only when obs->data.valid is
+	 * false, which means obs_free_data() has already run and destroyed
+	 * all sources (see obs_shutdown sequence).  No source can hold a
+	 * live reference to these pools at this point. */
 	if (destroying_core_data) {
 		obs_audio_threadpool_destroy(render_pool);
 		obs_audio_pool_destroy(output_buf_pool);
@@ -993,6 +1036,8 @@ static void obs_free_audio(void)
 		audio->output_buf_pool = output_buf_pool;
 		audio->mix_buf_pool = mix_buf_pool;
 		audio->render_pool = render_pool;
+		audio->graph_hooks_connected = graph_hooks_connected;
+		audio->graph_dirty = 1;
 	}
 }
 
@@ -2930,6 +2975,48 @@ uint64_t obs_get_average_frame_time_ns(void)
 uint64_t obs_get_frame_interval_ns(void)
 {
 	return obs->video.video_frame_interval_ns;
+}
+
+uint64_t obs_get_last_audio_callback_time_ns(void)
+{
+	return (uint64_t)os_atomic_load_long(&obs->audio.callback_last_ns);
+}
+
+uint64_t obs_get_average_audio_callback_time_ns(void)
+{
+	return (uint64_t)os_atomic_load_long(&obs->audio.callback_avg_ns);
+}
+
+uint64_t obs_get_peak_audio_callback_time_ns(void)
+{
+	return (uint64_t)os_atomic_load_long(&obs->audio.callback_max_ns);
+}
+
+uint32_t obs_get_audio_render_thread_count(void)
+{
+	return (uint32_t)obs_audio_threadpool_num_threads(obs->audio.render_pool);
+}
+
+uint32_t obs_get_audio_graph_rebuilds(void)
+{
+	return (uint32_t)os_atomic_load_long(&obs->audio.graph_rebuilds);
+}
+
+uint32_t obs_get_audio_parallel_ticks(void)
+{
+	return (uint32_t)os_atomic_load_long(&obs->audio.parallel_ticks);
+}
+
+uint32_t obs_get_audio_serial_ticks(void)
+{
+	return (uint32_t)os_atomic_load_long(&obs->audio.serial_ticks);
+}
+
+uint32_t obs_get_audio_peak_parallel_jobs(void)
+{
+	long peak_jobs = os_atomic_load_long(&obs->audio.peak_parallel_jobs);
+	size_t peak_batch = obs_audio_threadpool_peak_batch_size(obs->audio.render_pool);
+	return (uint32_t)((size_t)peak_jobs > peak_batch ? (size_t)peak_jobs : peak_batch);
 }
 
 enum obs_obj_type obs_obj_get_type(void *obj)

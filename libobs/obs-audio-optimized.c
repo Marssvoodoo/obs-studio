@@ -220,6 +220,14 @@ void copy_video_plane_optimized(uint8_t *dst, const uint8_t *src,
                                 uint32_t width, uint32_t height,
                                 uint32_t dst_stride, uint32_t src_stride)
 {
+	if (!height || !width)
+		return;
+	if (width > src_stride || width > dst_stride)
+		return;
+	if ((size_t)src_stride > SIZE_MAX / height ||
+	    (size_t)dst_stride > SIZE_MAX / height)
+		return; /* stride * height would overflow */
+
 #if !OBS_X86_SIMD
 	for (uint32_t y = 0; y < height; y++) {
 		const uint8_t *src_line = src + (size_t)y * src_stride;

@@ -43,6 +43,8 @@ if (-not (Test-Path $monitorScript)) {
     exit 1
 }
 
+$appStatsCsv = Join-Path $OutputDir "OBS_RUNTIME_STATS.csv"
+
 # -- Scenario definitions -----------------------------------------------------
 $scenarios = @(
     @{
@@ -141,9 +143,29 @@ if ($OBSExe -and (Test-Path $OBSExe)) {
     $alreadyRunning = (Get-Process -Name obs64 -ErrorAction SilentlyContinue) -or
                       (Get-Process -Name obs32 -ErrorAction SilentlyContinue)
     if (-not $alreadyRunning) {
+        if (Test-Path $appStatsCsv) {
+            Remove-Item $appStatsCsv -Force
+        }
+
+        $prevPerfCsv = $env:OBS_PERF_EXPORT_CSV
+        $prevPerfInterval = $env:OBS_PERF_EXPORT_INTERVAL_MS
+        $env:OBS_PERF_EXPORT_CSV = $appStatsCsv
+        $env:OBS_PERF_EXPORT_INTERVAL_MS = "1000"
         Write-Host "Launching OBS: $OBSExe" -ForegroundColor Cyan
         Start-Process -FilePath $OBSExe
+        if ($null -eq $prevPerfCsv) {
+            Remove-Item Env:OBS_PERF_EXPORT_CSV -ErrorAction SilentlyContinue
+        } else {
+            $env:OBS_PERF_EXPORT_CSV = $prevPerfCsv
+        }
+        if ($null -eq $prevPerfInterval) {
+            Remove-Item Env:OBS_PERF_EXPORT_INTERVAL_MS -ErrorAction SilentlyContinue
+        } else {
+            $env:OBS_PERF_EXPORT_INTERVAL_MS = $prevPerfInterval
+        }
         Start-Sleep -Seconds 5   # give OBS time to start
+    } elseif (-not (Test-Path $appStatsCsv)) {
+        Write-Host "OBS is already running; app-level stats export is not enabled for this session." -ForegroundColor Yellow
     }
 }
 
@@ -183,37 +205,51 @@ foreach ($sc in $scenarios) {
         "-ScenarioName",          $sc.Name,
         "-DurationSeconds",       $sc.Duration,
         "-SampleIntervalSeconds", "1",
-        "-OutputDir",             $OutputDir
+        "-OutputDir",             $OutputDir,
+        "-AppStatsCsv",           $appStatsCsv
     )
 
     Write-Host "> Monitoring started for '$($sc.Name)' ..." -ForegroundColor Green
     $job = Start-Process -FilePath "powershell.exe" -ArgumentList $args_ -PassThru -NoNewWindow -Wait
 
-    # Collect the latest CSV for this scenario and summarise
-    $csvFiles = Get-ChildItem -Path $OutputDir -Filter "$($sc.Name)_*.csv" |
-                Sort-Object LastWriteTime | Select-Object -Last 1
+    # Collect the latest summary CSV for this scenario and summarise
+    $summaryFile = Get-ChildItem -Path $OutputDir -Filter "$($sc.Name)_*_SUMMARY.csv" |
+                   Sort-Object LastWriteTime | Select-Object -Last 1
 
-    if ($csvFiles) {
-        $data = Import-Csv $csvFiles.FullName
-        $cpuArr = $data | Where-Object { $_.CPU_Pct -match '^\d' } | ForEach-Object { [double]$_.CPU_Pct }
-        $wsArr  = $data | ForEach-Object { [double]$_.WorkingSet_MB }
-
-        $avgCpu = if ($cpuArr) { [math]::Round(($cpuArr | Measure-Object -Average).Average, 1) } else { "N/A" }
-        $maxCpu = if ($cpuArr) { [math]::Round(($cpuArr | Measure-Object -Maximum).Maximum, 1) } else { "N/A" }
-        $avgWS  = if ($wsArr)  { [math]::Round(($wsArr  | Measure-Object -Average).Average, 1) } else { "N/A" }
-        $maxWS  = if ($wsArr)  { [math]::Round(($wsArr  | Measure-Object -Maximum).Maximum, 1) } else { "N/A" }
-
+    if ($summaryFile) {
+        $summary = Import-Csv $summaryFile.FullName | Select-Object -First 1
         $summaryRows.Add(@{
-            Test    = "Test $($sc.Id)"
-            AvgCPU  = $avgCpu
-            MaxCPU  = $maxCpu
-            AvgWS   = $avgWS
-            MaxWS   = $maxWS
-            Samples = $data.Count
-            CSV     = $csvFiles.Name
+            Test      = "Test $($sc.Id)"
+            AvgCPU    = $summary.ProcessAvgCPU_Pct
+            AvgFrame  = $summary.AvgFrameTime_ms
+            AudioCB   = $summary.AvgAudioCallback_ms
+            Lagged    = $summary.LaggedFrames
+            Samples   = $summary.Samples
+            SummaryCSV = $summaryFile.Name
         })
 
-        Write-Host "  Avg CPU: $avgCpu%   Max CPU: $maxCpu%   Avg WS: ${avgWS} MB   Max WS: ${maxWS} MB" -ForegroundColor Cyan
+        Write-Host "  Avg CPU: $($summary.ProcessAvgCPU_Pct)%   Avg Frame: $($summary.AvgFrameTime_ms) ms   Audio CB: $($summary.AvgAudioCallback_ms) ms   Lagged: $($summary.LaggedFrames)" -ForegroundColor Cyan
+    } else {
+        $csvFiles = Get-ChildItem -Path $OutputDir -Filter "$($sc.Name)_*.csv" |
+                    Sort-Object LastWriteTime | Select-Object -Last 1
+
+        if ($csvFiles) {
+            $data = Import-Csv $csvFiles.FullName
+            $cpuArr = $data | Where-Object { $_.CPU_Pct -match '^\d' } | ForEach-Object { [double]$_.CPU_Pct }
+            $avgCpu = if ($cpuArr) { [math]::Round(($cpuArr | Measure-Object -Average).Average, 1) } else { "N/A" }
+
+            $summaryRows.Add(@{
+                Test      = "Test $($sc.Id)"
+                AvgCPU    = $avgCpu
+                AvgFrame  = "N/A"
+                AudioCB   = "N/A"
+                Lagged    = "N/A"
+                Samples   = $data.Count
+                SummaryCSV = $csvFiles.Name
+            })
+
+            Write-Host "  Avg CPU: $avgCpu%   OBS runtime stats unavailable" -ForegroundColor DarkYellow
+        }
     }
 
     Write-Host ""
@@ -224,17 +260,17 @@ foreach ($sc in $scenarios) {
 if ($summaryRows.Count -gt 0) {
     Write-Host ""
     Write-Host "=== PHASE 3 BENCHMARK SUMMARY =========================================" -ForegroundColor Cyan
-    Write-Host ("{0,-10} {1,8} {2,8} {3,10} {4,10} {5,8}" -f "Test","AvgCPU%","MaxCPU%","AvgWS(MB)","MaxWS(MB)","Samples") -ForegroundColor White
-    Write-Host ("{0,-10} {1,8} {2,8} {3,10} {4,10} {5,8}" -f "----------","--------","--------","----------","----------","--------") -ForegroundColor DarkGray
+    Write-Host ("{0,-10} {1,8} {2,10} {3,10} {4,8} {5,8}" -f "Test","AvgCPU%","AvgFrame","AudioCB","Lagged","Samples") -ForegroundColor White
+    Write-Host ("{0,-10} {1,8} {2,10} {3,10} {4,8} {5,8}" -f "----------","--------","----------","----------","--------","--------") -ForegroundColor DarkGray
     foreach ($row in $summaryRows) {
-        Write-Host ("{0,-10} {1,8} {2,8} {3,10} {4,10} {5,8}" -f $row.Test, $row.AvgCPU, $row.MaxCPU, $row.AvgWS, $row.MaxWS, $row.Samples)
+        Write-Host ("{0,-10} {1,8} {2,10} {3,10} {4,8} {5,8}" -f $row.Test, $row.AvgCPU, $row.AvgFrame, $row.AudioCB, $row.Lagged, $row.Samples)
     }
 
     # Write machine-readable summary CSV
     $summaryPath = Join-Path $OutputDir "SUMMARY_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
-    "Test,AvgCPU_Pct,MaxCPU_Pct,AvgWorkingSet_MB,MaxWorkingSet_MB,Samples,CSV" | Out-File $summaryPath -Encoding UTF8
+    "Test,AvgCPU_Pct,AvgFrameTime_ms,AvgAudioCallback_ms,LaggedFrames,Samples,SummaryCSV" | Out-File $summaryPath -Encoding UTF8
     foreach ($row in $summaryRows) {
-        "$($row.Test),$($row.AvgCPU),$($row.MaxCPU),$($row.AvgWS),$($row.MaxWS),$($row.Samples),$($row.CSV)" |
+        "$($row.Test),$($row.AvgCPU),$($row.AvgFrame),$($row.AudioCB),$($row.Lagged),$($row.Samples),$($row.SummaryCSV)" |
             Out-File $summaryPath -Append -Encoding UTF8
     }
 

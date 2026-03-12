@@ -669,6 +669,11 @@ static const uint8_t *set_gpu_converted_plane(uint32_t width, uint32_t height, u
 static void set_gpu_converted_data(struct video_frame *output, const struct video_data *input,
 				   const struct video_output_info *info)
 {
+	/* Some format cases below compute width*2 or width*4 as uint32_t.
+	 * Reject widths that would cause silent wraparound. */
+	if (info->width > UINT32_MAX / 4)
+		return;
+
 	switch (info->format) {
 	case VIDEO_FORMAT_I420: {
 		const uint32_t width = info->width;
@@ -801,8 +806,27 @@ static void set_gpu_converted_data(struct video_frame *output, const struct vide
 	case VIDEO_FORMAT_AYUV:
 	case VIDEO_FORMAT_V210:
 	case VIDEO_FORMAT_R10L:
-		/* unimplemented */
-		;
+	default: {
+		uint32_t heights[MAX_AV_PLANES] = {0};
+		video_frame_get_plane_heights(heights, info->format, info->height);
+
+		for (uint32_t plane = 0; plane < MAX_AV_PLANES; plane++) {
+			if (!heights[plane] || !input->data[plane] || !output->data[plane])
+				continue;
+
+			uint32_t bytes = input->linesize[plane];
+			if (output->linesize[plane] < bytes)
+				bytes = output->linesize[plane];
+
+			copy_video_plane_optimized(output->data[plane],
+						   input->data[plane], bytes,
+						   heights[plane],
+						   output->linesize[plane],
+						   input->linesize[plane]);
+		}
+
+		break;
+	}
 	}
 }
 
@@ -812,6 +836,8 @@ static inline void copy_rgbx_frame(struct video_frame *output, const struct vide
 	/* Use SIMD-accelerated copy with NT stores for large frames and
 	 * prefetching for strided copies — same function used by
 	 * set_gpu_converted_plane(), width in bytes = width_px * 4. */
+	if (info->width > UINT32_MAX / 4)
+		return;
 	copy_video_plane_optimized(output->data[0], input->data[0], info->width * 4, info->height,
 				   output->linesize[0], input->linesize[0]);
 }

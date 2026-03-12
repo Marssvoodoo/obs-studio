@@ -27,6 +27,11 @@
 
 #include <obs-module.h>
 
+#include <QDateTime>
+#include <QFile>
+#include <QFileInfo>
+#include <QTextStream>
+
 #ifdef YOUTUBE_ENABLED
 #include <docks/YouTubeAppDock.hpp>
 #endif
@@ -38,6 +43,61 @@
 #include <dialogs/OBSBasicProperties.hpp>
 #include <dialogs/OBSBasicTransform.hpp>
 #include <models/SceneCollection.hpp>
+
+static void append_perf_export_sample(OBSBasic *basic, const QString &csvPath,
+				      uint64_t exportStartNs)
+{
+	QFile file(csvPath);
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append))
+		return;
+
+	QTextStream out(&file);
+	if (file.size() == 0) {
+		out << "TimestampUtc,ElapsedSec,OBS_CPU_Pct,ActiveFPS,AvgFrameTime_ms,"
+		       "TotalFrames,LaggedFrames,SkippedFrames,StreamTotalFrames,"
+		       "StreamDroppedFrames,RecordTotalFrames,RecordDroppedFrames,"
+		       "AudioCallbackLast_ms,AudioCallbackAvg_ms,AudioCallbackPeak_ms,"
+		       "AudioRenderThreads,AudioGraphRebuilds,AudioParallelTicks,"
+		       "AudioSerialTicks,AudioPeakParallelJobs\n";
+	}
+
+	OBSOutputAutoRelease strOutput = obs_frontend_get_streaming_output();
+	OBSOutputAutoRelease recOutput = obs_frontend_get_recording_output();
+	video_t *video = obs_get_video();
+	const double elapsedSec =
+		(double)(os_gettime_ns() - exportStartNs) / 1000000000.0;
+	const double cpuPct = basic->GetCPUUsage();
+	const double activeFps = obs_get_active_fps();
+	const double avgFrameMs =
+		(double)obs_get_average_frame_time_ns() / 1000000.0;
+	const double audioLastMs =
+		(double)obs_get_last_audio_callback_time_ns() / 1000000.0;
+	const double audioAvgMs =
+		(double)obs_get_average_audio_callback_time_ns() / 1000000.0;
+	const double audioPeakMs =
+		(double)obs_get_peak_audio_callback_time_ns() / 1000000.0;
+
+	out << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs) << ','
+	    << QString::number(elapsedSec, 'f', 3) << ','
+	    << QString::number(cpuPct, 'f', 2) << ','
+	    << QString::number(activeFps, 'f', 2) << ','
+	    << QString::number(avgFrameMs, 'f', 3) << ','
+	    << video_output_get_total_frames(video) << ','
+	    << obs_get_lagged_frames() << ','
+	    << video_output_get_skipped_frames(video) << ','
+	    << (strOutput ? obs_output_get_total_frames(strOutput) : 0) << ','
+	    << (strOutput ? obs_output_get_frames_dropped(strOutput) : 0) << ','
+	    << (recOutput ? obs_output_get_total_frames(recOutput) : 0) << ','
+	    << (recOutput ? obs_output_get_frames_dropped(recOutput) : 0) << ','
+	    << QString::number(audioLastMs, 'f', 3) << ','
+	    << QString::number(audioAvgMs, 'f', 3) << ','
+	    << QString::number(audioPeakMs, 'f', 3) << ','
+	    << obs_get_audio_render_thread_count() << ','
+	    << obs_get_audio_graph_rebuilds() << ','
+	    << obs_get_audio_parallel_ticks() << ','
+	    << obs_get_audio_serial_ticks() << ','
+	    << obs_get_audio_peak_parallel_jobs() << '\n';
+}
 #include <settings/OBSBasicSettings.hpp>
 #include <utility/QuickTransition.hpp>
 #include <utility/SceneRenameDelegate.hpp>
@@ -69,6 +129,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include "Windows.h"
+#include <ShlObj.h>
 #endif
 
 #include "moc_OBSBasic.cpp"
@@ -121,32 +182,66 @@ static void AddExtraModulePaths()
 		plugins_data_path = s;
 
 	if (!plugins_path.empty() && !plugins_data_path.empty()) {
+		/* Reject paths with traversal sequences or UNC prefixes
+		 * to prevent env-var-based DLL injection. */
+		auto path_looks_safe = [](const string &p) {
+			if (p.find("..") != string::npos)
+				return false;
+			if (p.size() >= 2 &&
+			    ((p[0] == '\\' && p[1] == '\\') ||
+			     (p[0] == '/' && p[1] == '/')))
+				return false;
+			return true;
+		};
+		if (!path_looks_safe(plugins_path) ||
+		    !path_looks_safe(plugins_data_path)) {
+			blog(LOG_WARNING,
+			     "OBS_PLUGINS_PATH rejected (unsafe path)");
+		} else {
 #if defined(__APPLE__)
-		plugins_path += "/%module%.plugin/Contents/MacOS";
-		plugins_data_path += "/%module%.plugin/Contents/Resources";
-		obs_add_module_path(plugins_path.c_str(), plugins_data_path.c_str());
+			plugins_path += "/%module%.plugin/Contents/MacOS";
+			plugins_data_path +=
+				"/%module%.plugin/Contents/Resources";
+			obs_add_module_path(plugins_path.c_str(),
+					    plugins_data_path.c_str());
 #else
-		string data_path_with_module_suffix;
-		data_path_with_module_suffix += plugins_data_path;
-		data_path_with_module_suffix += "/%module%";
-		obs_add_module_path(plugins_path.c_str(), data_path_with_module_suffix.c_str());
+			string data_path_with_module_suffix;
+			data_path_with_module_suffix += plugins_data_path;
+			data_path_with_module_suffix += "/%module%";
+			obs_add_module_path(
+				plugins_path.c_str(),
+				data_path_with_module_suffix.c_str());
 #endif
+		}
 	}
 
 #if defined(_WIN32)
 	/* Search the standard OBS Studio installation directory so that
-	   third-party plugins are available in development builds. */
+	   third-party plugins are available in development builds.
+	   Uses SHGetKnownFolderPath instead of GetEnvironmentVariable to
+	   avoid env-var manipulation attacks. */
 	{
-		char pf[512];
-		DWORD pf_len = GetEnvironmentVariableA("ProgramFiles", pf,
-						       sizeof(pf));
-		if (pf_len > 0 && pf_len < sizeof(pf)) {
-			string std_bin =
-				string(pf) + "/obs-studio/obs-plugins/64bit";
-			string std_data = string(pf) +
-					  "/obs-studio/data/obs-plugins/%module%";
-			obs_add_module_path(std_bin.c_str(),
-					    std_data.c_str());
+		PWSTR pf_wide = nullptr;
+		HRESULT hr = SHGetKnownFolderPath(FOLDERID_ProgramFiles,
+						  0, nullptr, &pf_wide);
+		if (SUCCEEDED(hr) && pf_wide) {
+			int len = WideCharToMultiByte(CP_UTF8, 0, pf_wide,
+						      -1, nullptr, 0,
+						      nullptr, nullptr);
+			if (len > 0) {
+				string pf((size_t)(len - 1), '\0');
+				WideCharToMultiByte(CP_UTF8, 0, pf_wide, -1,
+						    &pf[0], len, nullptr,
+						    nullptr);
+				string std_bin =
+					pf + "/obs-studio/obs-plugins/64bit";
+				string std_data =
+					pf +
+					"/obs-studio/data/obs-plugins/%module%";
+				obs_add_module_path(std_bin.c_str(),
+						    std_data.c_str());
+			}
+			CoTaskMemFree(pf_wide);
 		}
 	}
 #endif
@@ -472,6 +567,43 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	cpuUsageTimer = new QTimer(this);
 	connect(cpuUsageTimer.data(), &QTimer::timeout, ui->statusbar, &OBSBasicStatusBar::UpdateCPUUsage);
 	cpuUsageTimer->start(3000);
+
+	const QByteArray perfExportCsv = qgetenv("OBS_PERF_EXPORT_CSV");
+	if (!perfExportCsv.isEmpty()) {
+		bool intervalOk = false;
+		int intervalMs = qEnvironmentVariableIntValue(
+			"OBS_PERF_EXPORT_INTERVAL_MS", &intervalOk);
+		if (!intervalOk || intervalMs < 250)
+			intervalMs = 1000;
+
+		const QString perfExportPath =
+			QFileInfo(QString::fromUtf8(perfExportCsv))
+				.absoluteFilePath();
+
+		/* Reject paths with traversal sequences or UNC prefixes */
+		if (perfExportPath.contains(QStringLiteral("..")) ||
+		    perfExportPath.startsWith(QStringLiteral("\\\\")) ||
+		    perfExportPath.startsWith(QStringLiteral("//"))) {
+			blog(LOG_WARNING,
+			     "OBS_PERF_EXPORT_CSV rejected (unsafe path): %s",
+			     perfExportCsv.constData());
+		} else {
+			const uint64_t exportStartNs = os_gettime_ns();
+			QTimer *perfExportTimer = new QTimer(this);
+			connect(perfExportTimer, &QTimer::timeout, this,
+				[this, perfExportPath, exportStartNs]() {
+					append_perf_export_sample(
+						this, perfExportPath,
+						exportStartNs);
+				});
+			perfExportTimer->start(intervalMs);
+			append_perf_export_sample(this, perfExportPath,
+						  exportStartNs);
+			blog(LOG_INFO,
+			     "Performance stats export enabled: %s",
+			     perfExportCsv.constData());
+		}
+	}
 
 	diskFullTimer = new QTimer(this);
 	connect(diskFullTimer, &QTimer::timeout, this, &OBSBasic::CheckDiskSpaceRemaining);

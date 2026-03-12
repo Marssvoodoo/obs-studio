@@ -909,6 +909,14 @@ EXPORT uint64_t obs_get_video_frame_time(void);
 EXPORT double obs_get_active_fps(void);
 EXPORT uint64_t obs_get_average_frame_time_ns(void);
 EXPORT uint64_t obs_get_frame_interval_ns(void);
+EXPORT uint64_t obs_get_last_audio_callback_time_ns(void);
+EXPORT uint64_t obs_get_average_audio_callback_time_ns(void);
+EXPORT uint64_t obs_get_peak_audio_callback_time_ns(void);
+EXPORT uint32_t obs_get_audio_render_thread_count(void);
+EXPORT uint32_t obs_get_audio_graph_rebuilds(void);
+EXPORT uint32_t obs_get_audio_parallel_ticks(void);
+EXPORT uint32_t obs_get_audio_serial_ticks(void);
+EXPORT uint32_t obs_get_audio_peak_parallel_jobs(void);
 
 EXPORT uint32_t obs_get_total_frames(void);
 EXPORT uint32_t obs_get_lagged_frames(void);

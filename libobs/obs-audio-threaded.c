@@ -13,122 +13,89 @@
 #include "util/base.h"
 #include "util/platform.h"
 
-#include <stdlib.h>
-#include <string.h>
-
 /* ── Constants ───────────────────────────────────────────────────────────── */
-#define DEFAULT_QUEUE_CAP  256u
-#define MAX_THREADS         16u
-
-/* ── Job ring-queue ──────────────────────────────────────────────────────── */
-struct job_queue {
-	struct audio_job *buf;   /* ring buffer, capacity = cap entries    */
-	size_t            cap;   /* must be power of 2                     */
-	size_t            head;  /* producer writes here                   */
-	size_t            tail;  /* consumer reads from here               */
-	pthread_mutex_t   mutex;
-	pthread_cond_t    not_empty;
-};
-
-static bool job_queue_init(struct job_queue *q, size_t cap)
-{
-	if (!cap || (cap & (cap - 1)))
-		cap = DEFAULT_QUEUE_CAP;
-
-	q->buf  = bmalloc(cap * sizeof(struct audio_job));
-	if (!q->buf)
-		return false;
-
-	q->cap  = cap;
-	q->head = 0;
-	q->tail = 0;
-	pthread_mutex_init(&q->mutex, NULL);
-	pthread_cond_init(&q->not_empty, NULL);
-	return true;
-}
-
-static void job_queue_free(struct job_queue *q)
-{
-	bfree(q->buf);
-	pthread_mutex_destroy(&q->mutex);
-	pthread_cond_destroy(&q->not_empty);
-}
-
-/* Returns false if queue is full (non-blocking). */
-static bool job_queue_push(struct job_queue *q, struct audio_job job)
-{
-	pthread_mutex_lock(&q->mutex);
-	size_t next = (q->head + 1) & (q->cap - 1);
-	if (next == q->tail) {
-		pthread_mutex_unlock(&q->mutex);
-		return false;
-	}
-	q->buf[q->head] = job;
-	q->head = next;
-	pthread_cond_signal(&q->not_empty);
-	pthread_mutex_unlock(&q->mutex);
-	return true;
-}
-
-/* Blocks until a job is available or shutdown flag is set. */
-static bool job_queue_pop(struct job_queue *q, struct audio_job *out,
-			  volatile bool *shutdown)
-{
-	pthread_mutex_lock(&q->mutex);
-	while (q->head == q->tail) {
-		if (*shutdown) {
-			pthread_mutex_unlock(&q->mutex);
-			return false;
-		}
-		pthread_cond_wait(&q->not_empty, &q->mutex);
-	}
-	*out    = q->buf[q->tail];
-	q->tail = (q->tail + 1) & (q->cap - 1);
-	pthread_mutex_unlock(&q->mutex);
-	return true;
-}
+#define MAX_THREADS 16u
 
 /* ── Thread pool ─────────────────────────────────────────────────────────── */
 struct obs_audio_threadpool {
-	pthread_t        *threads;
-	size_t            num_threads;
+	pthread_t *threads;
+	size_t num_threads;
 
-	struct job_queue  queue;
-	volatile bool     shutdown;
+	pthread_mutex_t work_mutex;
+	pthread_cond_t work_cond;
+	pthread_cond_t done_cond;
+	bool shutdown;
 
-	/* Completion barrier */
-	pthread_mutex_t   barrier_mutex;
-	pthread_cond_t    barrier_cond;
+	const struct audio_job *jobs;
+	volatile long num_jobs;
 
-	/* Jobs submitted but not yet completed.
-	 * Using OBS os_atomic_* (volatile long) instead of C11 _Atomic. */
-	volatile long     pending;
-
-	/* Diagnostics: peak queue depth */
-	volatile long     peak_depth;
+	volatile long next_job;
+	volatile long pending;
+	volatile long batch_serial;
+	volatile long peak_batch_size;
 };
+
+static bool claim_job(struct obs_audio_threadpool *pool, struct audio_job *job)
+{
+	if (!pool->jobs)
+		return false;
+
+	while (true) {
+		long idx = os_atomic_load_long(&pool->next_job);
+		if (idx >= os_atomic_load_long(&pool->num_jobs))
+			return false;
+
+		if (!os_atomic_compare_swap_long(&pool->next_job, idx, idx + 1))
+			continue;
+
+		*job = pool->jobs[idx];
+		return true;
+	}
+}
+
+static void finish_job(struct obs_audio_threadpool *pool)
+{
+	long remaining = os_atomic_dec_long(&pool->pending);
+	if (remaining == 0) {
+		pthread_mutex_lock(&pool->work_mutex);
+		pthread_cond_broadcast(&pool->done_cond);
+		pthread_mutex_unlock(&pool->work_mutex);
+	}
+}
+
+static void drain_batch(struct obs_audio_threadpool *pool)
+{
+	struct audio_job job;
+
+	while (claim_job(pool, &job)) {
+		job.fn(job.param);
+		finish_job(pool);
+	}
+}
 
 /* Worker thread entry */
 static void *worker_thread(void *arg)
 {
 	struct obs_audio_threadpool *pool = arg;
+	long seen_serial = 0;
 	os_set_thread_name("obs-audio-worker");
 
 	while (true) {
-		struct audio_job job;
-		if (!job_queue_pop(&pool->queue, &job, &pool->shutdown))
+		pthread_mutex_lock(&pool->work_mutex);
+		while (!pool->shutdown &&
+		       os_atomic_load_long(&pool->batch_serial) == seen_serial)
+			pthread_cond_wait(&pool->work_cond, &pool->work_mutex);
+		if (pool->shutdown) {
+			pthread_mutex_unlock(&pool->work_mutex);
 			break;
-
-		job.fn(job.param);
-
-		/* Decrement pending; if we hit zero, wake the coordinator. */
-		long remaining = os_atomic_dec_long(&pool->pending);
-		if (remaining == 0) {
-			pthread_mutex_lock(&pool->barrier_mutex);
-			pthread_cond_broadcast(&pool->barrier_cond);
-			pthread_mutex_unlock(&pool->barrier_mutex);
 		}
+
+		seen_serial = os_atomic_load_long(&pool->batch_serial);
+		pthread_mutex_unlock(&pool->work_mutex);
+
+		drain_batch(pool);
 	}
+
 	return NULL;
 }
 
@@ -137,6 +104,8 @@ static void *worker_thread(void *arg)
 struct obs_audio_threadpool *obs_audio_threadpool_create(size_t num_threads,
 							 size_t queue_cap)
 {
+	UNUSED_PARAMETER(queue_cap);
+
 	if (num_threads == 0) {
 		size_t cores = (size_t)os_get_logical_cores();
 		if (cores <= 1)
@@ -144,17 +113,6 @@ struct obs_audio_threadpool *obs_audio_threadpool_create(size_t num_threads,
 		num_threads = cores - 1;
 		if (num_threads > MAX_THREADS)
 			num_threads = MAX_THREADS;
-	}
-
-	if (queue_cap == 0)
-		queue_cap = DEFAULT_QUEUE_CAP;
-
-	/* Round up to power of 2 */
-	if (queue_cap & (queue_cap - 1)) {
-		size_t p = 1;
-		while (p < queue_cap)
-			p <<= 1;
-		queue_cap = p;
 	}
 
 	struct obs_audio_threadpool *pool =
@@ -169,29 +127,30 @@ struct obs_audio_threadpool *obs_audio_threadpool_create(size_t num_threads,
 	}
 
 	pool->num_threads = num_threads;
-	pool->shutdown    = false;
-	pool->pending     = 0;
-	pool->peak_depth  = 0;
+	pool->shutdown = false;
+	pool->jobs = NULL;
+	pool->num_jobs = 0;
+	pool->next_job = 0;
+	pool->pending = 0;
+	pool->batch_serial = 0;
+	pool->peak_batch_size = 0;
 
-	pthread_mutex_init(&pool->barrier_mutex, NULL);
-	pthread_cond_init(&pool->barrier_cond, NULL);
-
-	if (!job_queue_init(&pool->queue, queue_cap)) {
-		bfree(pool->threads);
-		bfree(pool);
-		return NULL;
-	}
+	pthread_mutex_init(&pool->work_mutex, NULL);
+	pthread_cond_init(&pool->work_cond, NULL);
+	pthread_cond_init(&pool->done_cond, NULL);
 
 	for (size_t i = 0; i < num_threads; i++) {
 		if (pthread_create(&pool->threads[i], NULL, worker_thread,
 				   pool) != 0) {
+			pthread_mutex_lock(&pool->work_mutex);
 			pool->shutdown = true;
-			pthread_cond_broadcast(&pool->queue.not_empty);
+			pthread_cond_broadcast(&pool->work_cond);
+			pthread_mutex_unlock(&pool->work_mutex);
 			for (size_t j = 0; j < i; j++)
 				pthread_join(pool->threads[j], NULL);
-			job_queue_free(&pool->queue);
-			pthread_mutex_destroy(&pool->barrier_mutex);
-			pthread_cond_destroy(&pool->barrier_cond);
+			pthread_mutex_destroy(&pool->work_mutex);
+			pthread_cond_destroy(&pool->work_cond);
+			pthread_cond_destroy(&pool->done_cond);
 			bfree(pool->threads);
 			bfree(pool);
 			return NULL;
@@ -199,9 +158,8 @@ struct obs_audio_threadpool *obs_audio_threadpool_create(size_t num_threads,
 	}
 
 	blog(LOG_INFO,
-	     "obs-audio-threaded: pool created — %zu worker thread(s), "
-	     "queue capacity %zu",
-	     num_threads, queue_cap);
+	     "obs-audio-threaded: pool created — %zu worker thread(s)",
+	     num_threads);
 
 	return pool;
 }
@@ -211,67 +169,63 @@ void obs_audio_threadpool_destroy(struct obs_audio_threadpool *pool)
 	if (!pool)
 		return;
 
-	obs_audio_threadpool_wait(pool);
-
+	pthread_mutex_lock(&pool->work_mutex);
+	while (os_atomic_load_long(&pool->pending) > 0)
+		pthread_cond_wait(&pool->done_cond, &pool->work_mutex);
 	pool->shutdown = true;
-	pthread_mutex_lock(&pool->queue.mutex);
-	pthread_cond_broadcast(&pool->queue.not_empty);
-	pthread_mutex_unlock(&pool->queue.mutex);
+	pthread_cond_broadcast(&pool->work_cond);
+	pthread_mutex_unlock(&pool->work_mutex);
 
 	for (size_t i = 0; i < pool->num_threads; i++)
 		pthread_join(pool->threads[i], NULL);
 
-	job_queue_free(&pool->queue);
-	pthread_mutex_destroy(&pool->barrier_mutex);
-	pthread_cond_destroy(&pool->barrier_cond);
+	pthread_mutex_destroy(&pool->work_mutex);
+	pthread_cond_destroy(&pool->work_cond);
+	pthread_cond_destroy(&pool->done_cond);
 	bfree(pool->threads);
 	bfree(pool);
 }
 
-bool obs_audio_threadpool_submit(struct obs_audio_threadpool *pool,
-				 audio_job_fn fn, void *param)
+void obs_audio_threadpool_run(struct obs_audio_threadpool *pool,
+			      const struct audio_job *jobs, size_t num_jobs)
 {
-	if (!pool || !fn)
-		return false;
-
-	struct audio_job job = {fn, param};
-
-	/* Increment before enqueue so workers never see pending==0 while
-	 * a job is still sitting in the queue. */
-	os_atomic_inc_long(&pool->pending);
-
-	if (!job_queue_push(&pool->queue, job)) {
-		os_atomic_dec_long(&pool->pending);
-		blog(LOG_WARNING,
-		     "obs-audio-threaded: job queue full — "
-		     "running synchronously");
-		fn(param);
-		return false;
-	}
-
-	/* Update peak_depth diagnostic */
-	long qd = (long)((pool->queue.head - pool->queue.tail) &
-			 (pool->queue.cap - 1));
-	long cur_peak;
-	do {
-		cur_peak = os_atomic_load_long(&pool->peak_depth);
-		if (qd <= cur_peak)
-			break;
-	} while (!os_atomic_compare_exchange_long(&pool->peak_depth,
-						  &cur_peak, qd));
-
-	return true;
-}
-
-void obs_audio_threadpool_wait(struct obs_audio_threadpool *pool)
-{
-	if (!pool)
+	if (!jobs || !num_jobs)
 		return;
 
-	pthread_mutex_lock(&pool->barrier_mutex);
+	if (!pool) {
+		for (size_t i = 0; i < num_jobs; i++)
+			jobs[i].fn(jobs[i].param);
+		return;
+	}
+
+	long batch_size = (long)num_jobs;
+	long cur_peak;
+	do {
+		cur_peak = os_atomic_load_long(&pool->peak_batch_size);
+		if (batch_size <= cur_peak)
+			break;
+	} while (!os_atomic_compare_exchange_long(&pool->peak_batch_size,
+						  &cur_peak, batch_size));
+
+	pthread_mutex_lock(&pool->work_mutex);
+	pool->jobs = jobs;
+	os_atomic_set_long(&pool->num_jobs, (long)num_jobs);
+	os_atomic_set_long(&pool->next_job, 0);
+	os_atomic_set_long(&pool->pending, batch_size);
+	os_atomic_inc_long(&pool->batch_serial);
+	pthread_cond_broadcast(&pool->work_cond);
+	pthread_mutex_unlock(&pool->work_mutex);
+
+	/* Let the coordinator drain work too so small batches do not pay a
+	 * full worker wake-up penalty. */
+	drain_batch(pool);
+
+	pthread_mutex_lock(&pool->work_mutex);
 	while (os_atomic_load_long(&pool->pending) > 0)
-		pthread_cond_wait(&pool->barrier_cond, &pool->barrier_mutex);
-	pthread_mutex_unlock(&pool->barrier_mutex);
+		pthread_cond_wait(&pool->done_cond, &pool->work_mutex);
+	pool->jobs = NULL;
+	os_atomic_set_long(&pool->num_jobs, 0);
+	pthread_mutex_unlock(&pool->work_mutex);
 }
 
 size_t obs_audio_threadpool_num_threads(const struct obs_audio_threadpool *pool)
@@ -279,15 +233,15 @@ size_t obs_audio_threadpool_num_threads(const struct obs_audio_threadpool *pool)
 	return pool ? pool->num_threads : 0;
 }
 
-size_t obs_audio_threadpool_peak_depth(const struct obs_audio_threadpool *pool)
+size_t obs_audio_threadpool_peak_batch_size(const struct obs_audio_threadpool *pool)
 {
 	return pool ? (size_t)os_atomic_load_long(
-			      (volatile long *)&pool->peak_depth)
+			      (volatile long *)&pool->peak_batch_size)
 		    : 0;
 }
 
 void obs_audio_threadpool_reset_stats(struct obs_audio_threadpool *pool)
 {
 	if (pool)
-		os_atomic_set_long(&pool->peak_depth, 0);
+		os_atomic_set_long(&pool->peak_batch_size, 0);
 }

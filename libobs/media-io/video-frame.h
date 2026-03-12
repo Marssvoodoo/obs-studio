@@ -29,6 +29,9 @@ struct video_frame {
 	uint32_t linesize[MAX_AV_PLANES];
 };
 
+EXPORT void video_frame_get_linesizes(uint32_t linesize[MAX_AV_PLANES], enum video_format format, uint32_t width);
+EXPORT void video_frame_get_plane_heights(uint32_t heights[MAX_AV_PLANES], enum video_format format,
+					  uint32_t height);
 EXPORT void video_frame_init(struct video_frame *frame, enum video_format format, uint32_t width, uint32_t height);
 
 static inline void video_frame_free(struct video_frame *frame)

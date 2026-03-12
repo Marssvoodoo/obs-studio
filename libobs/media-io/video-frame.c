@@ -17,6 +17,10 @@
 #include <assert.h>
 #include "video-frame.h"
 
+extern void copy_video_plane_optimized(uint8_t *dst, const uint8_t *src,
+				       uint32_t width, uint32_t height,
+				       uint32_t dst_stride, uint32_t src_stride);
+
 #define HALF(size) ((size + 1) / 2)
 #define ALIGN(size, alignment) *size = (*size + alignment - 1) & (~(alignment - 1));
 
@@ -33,6 +37,11 @@ static inline void align_uint32(uint32_t *size, size_t alignment)
 /* assumes already-zeroed array */
 void video_frame_get_linesizes(uint32_t linesize[MAX_AV_PLANES], enum video_format format, uint32_t width)
 {
+	/* Guard against uint32_t overflow: the largest multiplier used
+	 * below is 4 (RGBA/BGRA/etc.), so reject widths that would wrap. */
+	if (width > UINT32_MAX / 4)
+		return;
+
 	switch (format) {
 	default:
 	case VIDEO_FORMAT_NONE:
@@ -213,6 +222,8 @@ void video_frame_init(struct video_frame *frame, enum video_format format, uint3
 	for (uint32_t i = 0; i < MAX_AV_PLANES; i++) {
 		if (!linesizes[i] || !heights[i])
 			continue;
+		if ((size_t)linesizes[i] > SIZE_MAX / (size_t)heights[i])
+			return; /* plane size overflow — frame stays zeroed */
 		size_t plane_size = (size_t)linesizes[i] * (size_t)heights[i];
 		align_size(&plane_size, alignment);
 		size += plane_size;
@@ -246,18 +257,11 @@ void video_frame_copy(struct video_frame *dst, const struct video_frame *src, en
 		if (!heights[i])
 			continue;
 
-		if (src->linesize[i] == dst->linesize[i]) {
-			memcpy(dst->data[i], src->data[i], src->linesize[i] * heights[i]);
-		} else { /* linesizes which do not match must be copied line-by-line */
-			size_t src_linesize = src->linesize[i];
-			size_t dst_linesize = dst->linesize[i];
-			/* determine how much we can write (frames with different line sizes require more )*/
-			size_t linesize = src_linesize < dst_linesize ? src_linesize : dst_linesize;
-			for (uint32_t y = 0; y < heights[i]; y++) {
-				uint8_t *src_pos = src->data[i] + (src_linesize * y);
-				uint8_t *dst_pos = dst->data[i] + (dst_linesize * y);
-				memcpy(dst_pos, src_pos, linesize);
-			}
-		}
+		uint32_t linesize = src->linesize[i] < dst->linesize[i]
+					    ? src->linesize[i]
+					    : dst->linesize[i];
+		copy_video_plane_optimized(dst->data[i], src->data[i], linesize,
+					   heights[i], dst->linesize[i],
+					   src->linesize[i]);
 	}
 }

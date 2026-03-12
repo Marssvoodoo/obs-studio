@@ -16,6 +16,7 @@
 ******************************************************************************/
 
 #include <inttypes.h>
+#include <string.h>
 #include "obs-internal.h"
 #include "util/util_uint64.h"
 
@@ -479,10 +480,146 @@ static inline const char *calc_min_ts(struct obs_core_data *data, size_t sample_
 	return buffering_name;
 }
 
-static inline void release_audio_sources(struct obs_core_audio *audio)
+struct audio_render_job {
+	obs_source_t *source;
+	uint32_t mixers;
+	size_t channels;
+	size_t sample_rate;
+	size_t audio_size;
+	struct obs_core_audio *audio;
+};
+
+static inline void release_audio_graph(struct obs_core_audio *audio)
 {
 	for (size_t i = 0; i < audio->render_order.num; i++)
 		obs_source_release(audio->render_order.array[i]);
+
+	da_resize(audio->render_order, 0);
+	da_resize(audio->root_nodes, 0);
+}
+
+static void rebuild_audio_graph(struct obs_core_audio *audio,
+				struct obs_core_data *data)
+{
+	release_audio_graph(audio);
+
+	pthread_mutex_lock(&obs->video.mixes_mutex);
+	for (size_t j = 0; j < obs->video.mixes.num; j++) {
+		struct obs_view *view = obs->video.mixes.array[j]->view;
+		if (!view)
+			continue;
+
+		pthread_mutex_lock(&view->channels_mutex);
+
+		/* NOTE: these are source channels, not audio channels */
+		for (uint32_t i = 0; i < MAX_CHANNELS; i++) {
+			obs_source_t *source = view->channels[i];
+			if (!source)
+				continue;
+			if (!obs_source_active(source))
+				continue;
+			if (obs_source_removed(source))
+				continue;
+
+			if (obs->video.mixes.array[j]->mix_audio)
+				da_push_back(audio->root_nodes, &source);
+
+			obs_source_enum_active_tree(source, push_audio_tree2, audio);
+			push_audio_tree(NULL, source, audio);
+		}
+		pthread_mutex_unlock(&view->channels_mutex);
+	}
+	pthread_mutex_unlock(&obs->video.mixes_mutex);
+
+	pthread_mutex_lock(&data->audio_sources_mutex);
+	struct obs_source *source = data->first_audio_source;
+	while (source) {
+		if (!obs_source_removed(source))
+			push_audio_tree(NULL, source, audio);
+		source = (struct obs_source *)source->next_audio_source;
+	}
+	pthread_mutex_unlock(&data->audio_sources_mutex);
+
+	os_atomic_set_long(&audio->graph_dirty, 0);
+	os_atomic_inc_long(&audio->graph_rebuilds);
+}
+
+static bool ensure_render_jobs_capacity(struct obs_core_audio *audio, size_t count)
+{
+	if (audio->render_jobs_capacity >= count)
+		return true;
+
+	size_t new_cap = audio->render_jobs_capacity ? audio->render_jobs_capacity : 8;
+	while (new_cap < count) {
+		if (new_cap > SIZE_MAX / 2) {
+			blog(LOG_ERROR, "ensure_render_jobs_capacity: "
+					"capacity overflow");
+			return false;
+		}
+		new_cap <<= 1;
+	}
+
+	if (new_cap > SIZE_MAX / sizeof(struct audio_render_job) ||
+	    new_cap > SIZE_MAX / sizeof(struct audio_job)) {
+		blog(LOG_ERROR, "ensure_render_jobs_capacity: "
+				"allocation size overflow");
+		return false;
+	}
+
+	struct audio_render_job *new_jobs =
+		bmalloc(new_cap * sizeof(struct audio_render_job));
+	struct audio_job *new_batch =
+		bmalloc(new_cap * sizeof(struct audio_job));
+	if (!new_jobs || !new_batch) {
+		bfree(new_jobs);
+		bfree(new_batch);
+		return false;
+	}
+
+	if (audio->render_jobs_capacity > 0) {
+		memcpy(new_jobs, audio->render_jobs,
+		       audio->render_jobs_capacity * sizeof(struct audio_render_job));
+		memcpy(new_batch, audio->render_job_batch,
+		       audio->render_jobs_capacity * sizeof(struct audio_job));
+	}
+
+	bfree(audio->render_jobs);
+	bfree(audio->render_job_batch);
+	audio->render_jobs = new_jobs;
+	audio->render_job_batch = new_batch;
+	audio->render_jobs_capacity = new_cap;
+	return true;
+}
+
+static void record_audio_callback_stats(struct obs_core_audio *audio,
+					uint64_t callback_start_ns,
+					size_t parallel_jobs)
+{
+	long elapsed_ns = (long)(os_gettime_ns() - callback_start_ns);
+	long samples = os_atomic_load_long(&audio->callback_samples) + 1;
+	long avg_ns = os_atomic_load_long(&audio->callback_avg_ns);
+	long max_ns = os_atomic_load_long(&audio->callback_max_ns);
+	long peak_jobs = os_atomic_load_long(&audio->peak_parallel_jobs);
+
+	os_atomic_set_long(&audio->callback_last_ns, elapsed_ns);
+	os_atomic_set_long(&audio->callback_samples, samples);
+	if (samples == 1)
+		avg_ns = elapsed_ns;
+	else
+		avg_ns += (elapsed_ns - avg_ns) / samples;
+	os_atomic_set_long(&audio->callback_avg_ns, avg_ns);
+
+	if (elapsed_ns > max_ns)
+		os_atomic_set_long(&audio->callback_max_ns, elapsed_ns);
+
+	if (parallel_jobs > 0) {
+		os_atomic_inc_long(&audio->parallel_ticks);
+		if ((long)parallel_jobs > peak_jobs)
+			os_atomic_set_long(&audio->peak_parallel_jobs,
+					   (long)parallel_jobs);
+	} else {
+		os_atomic_inc_long(&audio->serial_ticks);
+	}
 }
 
 static inline void execute_audio_tasks(void)
@@ -544,16 +681,6 @@ static inline void clear_audio_output_buf(obs_source_t *source, struct obs_core_
 	}
 }
 
-/* ── Phase 6.4: parallel audio-render job ──────────────────────────────── */
-struct audio_render_job {
-	obs_source_t         *source;
-	uint32_t              mixers;
-	size_t                channels;
-	size_t                sample_rate;
-	size_t                audio_size;
-	struct obs_core_audio *audio;
-};
-
 static inline bool can_parallel_render_source(const obs_source_t *source)
 {
 	/* Only parallelise leaf-style sources that render from their own private
@@ -590,14 +717,14 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 	struct obs_core_data *data = &obs->data;
 	struct obs_core_audio *audio = &obs->audio;
 	struct obs_source *source;
+	const uint64_t callback_start_ns = os_gettime_ns();
 	size_t sample_rate = audio_output_get_sample_rate(audio->audio);
 	size_t channels = audio_output_get_channels(audio->audio);
 	struct ts_info ts = {start_ts_in, end_ts_in};
 	size_t audio_size;
+	size_t parallel_jobs = 0;
 	uint64_t min_ts;
-
-	da_resize(audio->render_order, 0);
-	da_resize(audio->root_nodes, 0);
+	bool callback_result = true;
 
 	deque_push_back(&audio->buffered_timestamps, &ts, sizeof(ts));
 	deque_peek_front(&audio->buffered_timestamps, &ts, sizeof(ts));
@@ -611,50 +738,8 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 
 	/* ------------------------------------------------ */
 	/* build audio render order */
-
-	pthread_mutex_lock(&obs->video.mixes_mutex);
-	for (size_t j = 0; j < obs->video.mixes.num; j++) {
-		struct obs_view *view = obs->video.mixes.array[j]->view;
-		if (!view)
-			continue;
-
-		pthread_mutex_lock(&view->channels_mutex);
-
-		/* NOTE: these are source channels, not audio channels */
-		for (uint32_t i = 0; i < MAX_CHANNELS; i++) {
-			obs_source_t *source = view->channels[i];
-			if (!source)
-				continue;
-			if (!obs_source_active(source))
-				continue;
-			if (obs_source_removed(source))
-				continue;
-
-			/* first, add top - level sources as root_nodes */
-			if (obs->video.mixes.array[j]->mix_audio)
-				da_push_back(audio->root_nodes, &source);
-
-			/* Build audio tree, tag duplicate individual sources */
-			obs_source_enum_active_tree(source, push_audio_tree2, audio);
-
-			/* add top - level sources to audio tree */
-			push_audio_tree(NULL, source, audio);
-		}
-		pthread_mutex_unlock(&view->channels_mutex);
-	}
-	pthread_mutex_unlock(&obs->video.mixes_mutex);
-
-	pthread_mutex_lock(&data->audio_sources_mutex);
-
-	source = data->first_audio_source;
-	while (source) {
-		if (!obs_source_removed(source)) {
-			push_audio_tree(NULL, source, audio);
-		}
-		source = (struct obs_source *)source->next_audio_source;
-	}
-
-	pthread_mutex_unlock(&data->audio_sources_mutex);
+	if (os_atomic_load_long(&audio->graph_dirty) || !audio->render_order.num)
+		rebuild_audio_graph(audio, data);
 
 	/* ------------------------------------------------ */
 	/* render audio data (Phase 6.4: parallel simple-source render)    */
@@ -679,34 +764,39 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 				     audio->render_pool));
 	}
 
-	bool use_parallel = (audio->render_pool != NULL && n_sources >= 3);
-	struct audio_render_job *jobs = NULL;
-	if (use_parallel)
-		jobs = bmalloc(n_sources * sizeof(struct audio_render_job));
+	bool use_parallel = (audio->render_pool != NULL && n_sources >= 3 &&
+			     ensure_render_jobs_capacity(audio, n_sources));
 
 	/* ---- Pass 1: dispatch simple sources to thread pool ---- */
 	for (size_t i = 0; i < n_sources; i++) {
 		obs_source_t *src = audio->render_order.array[i];
-		if (!use_parallel || !can_parallel_render_source(src))
+		if (!use_parallel || obs_source_removed(src) ||
+		    !can_parallel_render_source(src))
 			continue;
-		jobs[i].source      = src;
-		jobs[i].mixers      = mixers;
-		jobs[i].channels    = channels;
-		jobs[i].sample_rate = sample_rate;
-		jobs[i].audio_size  = audio_size;
-		jobs[i].audio       = audio;
-		obs_audio_threadpool_submit(audio->render_pool,
-					   do_audio_render_job, &jobs[i]);
+
+		audio->render_jobs[parallel_jobs].source = src;
+		audio->render_jobs[parallel_jobs].mixers = mixers;
+		audio->render_jobs[parallel_jobs].channels = channels;
+		audio->render_jobs[parallel_jobs].sample_rate = sample_rate;
+		audio->render_jobs[parallel_jobs].audio_size = audio_size;
+		audio->render_jobs[parallel_jobs].audio = audio;
+		audio->render_job_batch[parallel_jobs].fn = do_audio_render_job;
+		audio->render_job_batch[parallel_jobs].param =
+			&audio->render_jobs[parallel_jobs];
+		parallel_jobs++;
 	}
 
-	/* Wait for all parallel simple-source renders to finish. */
-	if (use_parallel)
-		obs_audio_threadpool_wait(audio->render_pool);
+	if (parallel_jobs > 0)
+		obs_audio_threadpool_run(audio->render_pool,
+					 audio->render_job_batch,
+					 parallel_jobs);
 
 	/* ---- Pass 2: composite sources rendered serially in order ---- */
 	for (size_t i = 0; i < n_sources; i++) {
 		obs_source_t *source = audio->render_order.array[i];
-		if (use_parallel && can_parallel_render_source(source))
+		if (obs_source_removed(source))
+			continue;
+		if (parallel_jobs > 0 && can_parallel_render_source(source))
 			continue;
 		obs_source_audio_render(source, mixers, channels, sample_rate,
 					audio_size);
@@ -714,11 +804,11 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 			clear_audio_output_buf(source, audio);
 	}
 
-	bfree(jobs);
-
 	/* ---- Pass 3: backward-timestamp recovery (serial, all sources) ---- */
 	for (size_t i = 0; i < n_sources; i++) {
 		obs_source_t *source = audio->render_order.array[i];
+		if (obs_source_removed(source))
+			continue;
 		/* if a source has gone backward in time and we can no
 		 * longer buffer, drop some or all of its audio */
 		if (audio_buffering_maxed(audio) && source->audio_ts != 0 &&
@@ -773,6 +863,8 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 		for (size_t i = 0; i < audio->root_nodes.num; i++) {
 			obs_source_t *source = audio->root_nodes.array[i];
 
+			if (obs_source_removed(source))
+				continue;
 			if (source->audio_pending)
 				continue;
 
@@ -800,21 +892,19 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 
 	pthread_mutex_unlock(&data->audio_sources_mutex);
 
-	/* ------------------------------------------------ */
-	/* release audio sources */
-	release_audio_sources(audio);
-
 	deque_pop_front(&audio->buffered_timestamps, NULL, sizeof(ts));
 
 	*out_ts = ts.start;
 
 	if (audio->buffering_wait_ticks) {
 		audio->buffering_wait_ticks--;
-		return false;
+		callback_result = false;
 	}
 
-	execute_audio_tasks();
+	if (callback_result)
+		execute_audio_tasks();
+	record_audio_callback_stats(audio, callback_start_ns, parallel_jobs);
 
 	UNUSED_PARAMETER(param);
-	return true;
+	return callback_result;
 }
