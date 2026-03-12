@@ -928,8 +928,10 @@ static bool obs_init_audio(struct audio_output_info *ai)
 		const size_t out_block =
 			sizeof(float) * AUDIO_OUTPUT_FRAMES * MAX_AUDIO_CHANNELS * MAX_AUDIO_MIXES;
 		const size_t mix_block = sizeof(float) * AUDIO_OUTPUT_FRAMES * MAX_AUDIO_CHANNELS;
-		audio->output_buf_pool = obs_audio_pool_create(out_block, 32);
-		audio->mix_buf_pool    = obs_audio_pool_create(mix_block, 32);
+		if (!audio->output_buf_pool)
+			audio->output_buf_pool = obs_audio_pool_create(out_block, 32);
+		if (!audio->mix_buf_pool)
+			audio->mix_buf_pool = obs_audio_pool_create(mix_block, 32);
 		if (!audio->output_buf_pool || !audio->mix_buf_pool)
 			blog(LOG_WARNING, "obs_init_audio: audio buffer pool creation failed");
 		return true;
@@ -955,6 +957,10 @@ static void stop_audio(void)
 static void obs_free_audio(void)
 {
 	struct obs_core_audio *audio = &obs->audio;
+	struct obs_audio_pool *output_buf_pool = audio->output_buf_pool;
+	struct obs_audio_pool *mix_buf_pool = audio->mix_buf_pool;
+	struct obs_audio_threadpool *render_pool = audio->render_pool;
+	const bool destroying_core_data = !obs->data.valid;
 	if (audio->audio)
 		audio_output_close(audio->audio);
 
@@ -969,10 +975,25 @@ static void obs_free_audio(void)
 	pthread_mutex_destroy(&audio->task_mutex);
 	pthread_mutex_destroy(&audio->monitoring_mutex);
 
-	obs_audio_pool_destroy(audio->output_buf_pool);
-	obs_audio_pool_destroy(audio->mix_buf_pool);
+	/* The global audio pools and render thread pool outlive audio resets.
+	 * Existing sources keep pointers into these allocations, so they may
+	 * only be destroyed once source data has been torn down. */
+	if (destroying_core_data) {
+		obs_audio_threadpool_destroy(render_pool);
+		obs_audio_pool_destroy(output_buf_pool);
+		obs_audio_pool_destroy(mix_buf_pool);
+		render_pool = NULL;
+		output_buf_pool = NULL;
+		mix_buf_pool = NULL;
+	}
 
 	memset(audio, 0, sizeof(struct obs_core_audio));
+
+	if (!destroying_core_data) {
+		audio->output_buf_pool = output_buf_pool;
+		audio->mix_buf_pool = mix_buf_pool;
+		audio->render_pool = render_pool;
+	}
 }
 
 static bool obs_init_data(void)

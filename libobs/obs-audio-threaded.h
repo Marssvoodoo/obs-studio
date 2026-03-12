@@ -51,7 +51,8 @@ struct audio_job {
  * obs_audio_threadpool_create
  *
  * @num_threads   Number of worker threads to spawn.  Pass 0 to auto-detect
- *               (= logical-core-count - 1, clamped to [1, 16]).
+ *               (= logical-core-count - 1, clamped to [1, 16], disabled on
+ *               single-core systems).
  * @queue_cap     Capacity of the internal job ring-queue.  Must be a power of
  *               2.  Pass 0 for the default (256 jobs, enough for any OBS
  *               scene).

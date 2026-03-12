@@ -232,6 +232,18 @@ elseif(
   set_source_files_properties(obs-data.c PROPERTIES COMPILE_OPTIONS "-Wno-deprecated-declarations")
 endif()
 
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64|i[3-6]86|x86)$")
+  if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+    set_source_files_properties(obs-audio-optimized.c PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+  elseif(
+    CMAKE_C_COMPILER_ID STREQUAL "GNU"
+    OR CMAKE_C_COMPILER_ID STREQUAL "Clang"
+    OR CMAKE_C_COMPILER_ID STREQUAL "AppleClang"
+  )
+    set_source_files_properties(obs-audio-optimized.c PROPERTIES COMPILE_OPTIONS "-mavx2")
+  endif()
+endif()
+
 target_compile_features(libobs PUBLIC cxx_std_17)
 
 target_compile_definitions(

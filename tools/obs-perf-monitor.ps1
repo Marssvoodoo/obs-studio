@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    OBS Studio Performance Monitor — Phase 3 benchmark data collector.
+    OBS Studio Performance Monitor - Phase 3 benchmark data collector.
 
 .DESCRIPTION
     Continuously samples the obs64 (or obs32) process and writes CPU,
@@ -35,7 +35,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# ── Locate OBS process ────────────────────────────────────────────────────────
+# -- Locate OBS process -------------------------------------------------------
 $processName = "obs64"
 $proc = Get-Process -Name $processName -ErrorAction SilentlyContinue
 if (-not $proc) {
@@ -48,9 +48,9 @@ if (-not $proc) {
 }
 
 $pid_ = $proc.Id
-Write-Host "Monitoring $processName (PID $pid_) …" -ForegroundColor Cyan
+Write-Host "Monitoring $processName (PID $pid_) ..." -ForegroundColor Cyan
 
-# ── Prepare output CSV ────────────────────────────────────────────────────────
+# -- Prepare output CSV -------------------------------------------------------
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $csvName   = "${ScenarioName}_${timestamp}.csv"
 $csvPath   = Join-Path $OutputDir $csvName
@@ -64,7 +64,7 @@ Write-Host ("-" * 72)
 Write-Host ("{0,-24} {1,7} {2,8} {3,12} {4,10}" -f "Time","CPU%","WS(MB)","Private(MB)","Threads")
 Write-Host ("-" * 72)
 
-# ── CPU counter helper ────────────────────────────────────────────────────────
+# -- CPU counter helper -------------------------------------------------------
 $cpuCounter  = New-Object System.Diagnostics.PerformanceCounter("Process", "% Processor Time", $processName, $true)
 $null = $cpuCounter.NextValue()   # first call always returns 0; discard it
 Start-Sleep -Milliseconds 500
@@ -73,14 +73,14 @@ $logicalCores = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
 $startTime    = Get-Date
 $elapsed      = 0
 
-# ── Sampling loop ─────────────────────────────────────────────────────────────
+# -- Sampling loop ------------------------------------------------------------
 try {
     while ($elapsed -lt $DurationSeconds) {
         Start-Sleep -Seconds $SampleIntervalSeconds
 
         $proc = Get-Process -Id $pid_ -ErrorAction SilentlyContinue
         if (-not $proc) {
-            Write-Warning "OBS process ended — stopping monitor."
+            Write-Warning "OBS process ended - stopping monitor."
             break
         }
 
@@ -120,7 +120,7 @@ Write-Host ""
 Write-Host "Monitor complete.  CSV saved to:" -ForegroundColor Green
 Write-Host "  $csvPath" -ForegroundColor Green
 
-# ── Summary statistics ────────────────────────────────────────────────────────
+# -- Summary statistics -------------------------------------------------------
 $data = Import-Csv $csvPath
 
 $cpuValues  = $data | Where-Object { $_.CPU_Pct -match '^\d' } | ForEach-Object { [double]$_.CPU_Pct }
@@ -142,9 +142,9 @@ $cpuStats = Get-Stats $cpuValues
 $wsStats  = Get-Stats $wsMBValues
 
 Write-Host ""
-Write-Host "═══ Summary: $ScenarioName ══════════════════════════════════════" -ForegroundColor Cyan
-Write-Host ("CPU %        — min: {0,7}  avg: {1,7}  p95: {2,7}  max: {3,7}" -f $cpuStats.Min, $cpuStats.Avg, $cpuStats.P95, $cpuStats.Max)
-Write-Host ("WorkingSet MB— min: {0,7}  avg: {1,7}  p95: {2,7}  max: {3,7}" -f $wsStats.Min, $wsStats.Avg, $wsStats.P95, $wsStats.Max)
+Write-Host "=== Summary: $ScenarioName ======================================" -ForegroundColor Cyan
+Write-Host ("CPU %        - min: {0,7}  avg: {1,7}  p95: {2,7}  max: {3,7}" -f $cpuStats.Min, $cpuStats.Avg, $cpuStats.P95, $cpuStats.Max)
+Write-Host ("WorkingSet MB- min: {0,7}  avg: {1,7}  p95: {2,7}  max: {3,7}" -f $wsStats.Min, $wsStats.Avg, $wsStats.P95, $wsStats.Max)
 Write-Host "Samples     : $($data.Count)"
 Write-Host ""
 Write-Host "Copy the summary above into PERFORMANCE_TEST_RESULTS.md." -ForegroundColor Yellow

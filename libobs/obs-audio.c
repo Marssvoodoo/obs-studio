@@ -554,6 +554,24 @@ struct audio_render_job {
 	struct obs_core_audio *audio;
 };
 
+static inline bool can_parallel_render_source(const obs_source_t *source)
+{
+	/* Only parallelise leaf-style sources that render from their own private
+	 * buffers. Sources with audio_render/audio_mix callbacks or composite/
+	 * submix flags can depend on other sources' output within the same tick,
+	 * so they must stay in render_order on the coordinator thread. */
+	if (source->info.audio_render || source->info.audio_mix)
+		return false;
+
+	if (source->info.output_flags & OBS_SOURCE_COMPOSITE)
+		return false;
+
+	if (source->info.output_flags & OBS_SOURCE_SUBMIX)
+		return false;
+
+	return true;
+}
+
 /* Called from worker threads — only touches source-private buffers. */
 static void do_audio_render_job(void *param)
 {
@@ -641,10 +659,10 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 	/* ------------------------------------------------ */
 	/* render audio data (Phase 6.4: parallel simple-source render)    */
 	/*                                                                   */
-	/* Pass 1: simple sources (no audio_render callback) are dispatched */
-	/*         to the thread pool — they have no cross-source deps.     */
-	/* Pass 2: composite sources (scenes/transitions) are rendered      */
-	/*         serially in dependency order once Pass 1 drains.         */
+	/* Pass 1: leaf sources with no cross-source audio dependencies are */
+	/*         dispatched to the thread pool.                           */
+	/* Pass 2: dependent/composite/submix sources are rendered serially */
+	/*         in render_order once Pass 1 drains.                      */
 	/* Pass 3: backward-timestamp recovery runs serially for all.       */
 	size_t n_sources = audio->render_order.num;
 
@@ -669,8 +687,8 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 	/* ---- Pass 1: dispatch simple sources to thread pool ---- */
 	for (size_t i = 0; i < n_sources; i++) {
 		obs_source_t *src = audio->render_order.array[i];
-		if (!use_parallel || src->info.audio_render)
-			continue; /* composite — deferred to Pass 2 */
+		if (!use_parallel || !can_parallel_render_source(src))
+			continue;
 		jobs[i].source      = src;
 		jobs[i].mixers      = mixers;
 		jobs[i].channels    = channels;
@@ -688,8 +706,8 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 	/* ---- Pass 2: composite sources rendered serially in order ---- */
 	for (size_t i = 0; i < n_sources; i++) {
 		obs_source_t *source = audio->render_order.array[i];
-		if (use_parallel && !source->info.audio_render)
-			continue; /* already done in Pass 1 */
+		if (use_parallel && can_parallel_render_source(source))
+			continue;
 		obs_source_audio_render(source, mixers, channels, sample_rate,
 					audio_size);
 		if (should_silence_monitored_source(source, audio))

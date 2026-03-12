@@ -139,7 +139,9 @@ struct obs_audio_threadpool *obs_audio_threadpool_create(size_t num_threads,
 {
 	if (num_threads == 0) {
 		size_t cores = (size_t)os_get_logical_cores();
-		num_threads  = (cores > 1) ? (cores - 1) : 1;
+		if (cores <= 1)
+			return NULL;
+		num_threads = cores - 1;
 		if (num_threads > MAX_THREADS)
 			num_threads = MAX_THREADS;
 	}

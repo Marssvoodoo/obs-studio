@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    OBS Phase 3 — Automated test-scenario runner.
+    OBS Phase 3 - Automated test-scenario runner.
 
 .DESCRIPTION
     Guides the tester through each of the four benchmark scenarios defined in
@@ -43,25 +43,25 @@ if (-not (Test-Path $monitorScript)) {
     exit 1
 }
 
-# ── Scenario definitions ──────────────────────────────────────────────────────
+# -- Scenario definitions -----------------------------------------------------
 $scenarios = @(
     @{
         Id          = 1
         Name        = "Test1_SingleSource_Baseline"
         Duration    = 600
         Description = @"
-TEST 1 — SINGLE SOURCE (BASELINE)
-──────────────────────────────────────────────────────────────────────────────
+TEST 1 - SINGLE SOURCE (BASELINE)
+------------------------------------------------------------------------
 Configure OBS as follows BEFORE pressing Enter:
-  • Resolution : 1920×1080 @ 30 fps
-  • Sources    : 1 video source (webcam or video capture device)
+  * Resolution : 1920x1080 @ 30 fps
+  * Sources    : 1 video source (webcam or video capture device)
                  1 audio source (microphone or desktop audio)
-  • Recording  : Start recording (do NOT stream)
-  • Encoder    : Software (x264) — quality preset: veryfast
-  • No filters on any source
+  * Recording  : Start recording (do NOT stream)
+  * Encoder    : Software (x264) - quality preset: veryfast
+  * No filters on any source
 
 This is the BASELINE.  All other tests are compared to this one.
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------
 "@
     },
     @{
@@ -69,18 +69,18 @@ This is the BASELINE.  All other tests are compared to this one.
         Name        = "Test2_MultipleSources"
         Duration    = 600
         Description = @"
-TEST 2 — MULTIPLE SOURCES
-──────────────────────────────────────────────────────────────────────────────
+TEST 2 - MULTIPLE SOURCES
+------------------------------------------------------------------------
 Configure OBS as follows BEFORE pressing Enter:
-  • Resolution : 1920×1080 @ 30 fps
-  • Sources    : 4 video sources (can be window captures or image sources)
+  * Resolution : 1920x1080 @ 30 fps
+  * Sources    : 4 video sources (can be window captures or image sources)
                  4 audio sources (can be virtual audio cables or file loops)
-  • Recording  : Start recording
-  • Encoder    : Same as Test 1 (x264 veryfast)
-  • No filters
+  * Recording  : Start recording
+  * Encoder    : Same as Test 1 (x264 veryfast)
+  * No filters
 
 Expected: CPU usage increases; frame time should remain < 33 ms (30 fps).
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------
 "@
     },
     @{
@@ -88,18 +88,18 @@ Expected: CPU usage increases; frame time should remain < 33 ms (30 fps).
         Name        = "Test3_HighResolution"
         Duration    = 300
         Description = @"
-TEST 3 — HIGH RESOLUTION (4K60)
-──────────────────────────────────────────────────────────────────────────────
+TEST 3 - HIGH RESOLUTION (4K60)
+------------------------------------------------------------------------
 Configure OBS as follows BEFORE pressing Enter:
-  • Resolution : 3840×2160 @ 60 fps  (or highest your GPU supports)
-  • Sources    : 1 video source (screen/display capture at native res)
+  * Resolution : 3840x2160 @ 60 fps  (or highest your GPU supports)
+  * Sources    : 1 video source (screen/display capture at native res)
                  2 audio sources
-  • Recording  : Start recording
-  • Encoder    : NVENC / AMF / QuickSync if available; else x264 ultrafast
-  • Watch for dropped frames in Stats panel (View → Stats)
+  * Recording  : Start recording
+  * Encoder    : NVENC / AMF / QuickSync if available; else x264 ultrafast
+  * Watch for dropped frames in Stats panel (View > Stats)
 
 Duration: 5 minutes.
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------
 "@
     },
     @{
@@ -107,27 +107,27 @@ Duration: 5 minutes.
         Name        = "Test4_ComplexScene"
         Duration    = 600
         Description = @"
-TEST 4 — COMPLEX SCENE
-──────────────────────────────────────────────────────────────────────────────
+TEST 4 - COMPLEX SCENE
+------------------------------------------------------------------------
 Configure OBS as follows BEFORE pressing Enter:
-  • Resolution : 1920×1080 @ 60 fps
-  • Sources    : 8+ sources (mix of video captures, images, browser sources)
-  • Audio      : 4+ audio sources
-  • Filters    : At least 2 sources should have filters (e.g. colour correction,
+  * Resolution : 1920x1080 @ 60 fps
+  * Sources    : 8+ sources (mix of video captures, images, browser sources)
+  * Audio      : 4+ audio sources
+  * Filters    : At least 2 sources should have filters (e.g. colour correction,
                  noise suppression)
-  • Transitions: Set a transition (e.g. Fade 300 ms) and switch scenes roughly
+  * Transitions: Set a transition (e.g. Fade 300 ms) and switch scenes roughly
                  once per minute during the test
-  • Streaming  : Start streaming (RTMP, any ingest) AND recording simultaneously
+  * Streaming  : Start streaming (RTMP, any ingest) AND recording simultaneously
 
 This is the worst-case stress test.
-──────────────────────────────────────────────────────────────────────────────
+------------------------------------------------------------------------
 "@
     }
 )
 
-# ── Helper: wait for OBS ──────────────────────────────────────────────────────
+# -- Helper: wait for OBS -----------------------------------------------------
 function Wait-ForOBS {
-    Write-Host "Waiting for OBS to be running…" -ForegroundColor Yellow
+    Write-Host "Waiting for OBS to be running..." -ForegroundColor Yellow
     while ($true) {
         $p = Get-Process -Name obs64 -ErrorAction SilentlyContinue
         if (-not $p) { $p = Get-Process -Name obs32 -ErrorAction SilentlyContinue }
@@ -136,7 +136,7 @@ function Wait-ForOBS {
     }
 }
 
-# ── Optional: auto-launch OBS ─────────────────────────────────────────────────
+# -- Optional: auto-launch OBS ------------------------------------------------
 if ($OBSExe -and (Test-Path $OBSExe)) {
     $alreadyRunning = (Get-Process -Name obs64 -ErrorAction SilentlyContinue) -or
                       (Get-Process -Name obs32 -ErrorAction SilentlyContinue)
@@ -149,24 +149,26 @@ if ($OBSExe -and (Test-Path $OBSExe)) {
 
 Wait-ForOBS
 
-# ── Banner ────────────────────────────────────────────────────────────────────
+# -- Banner --------------------------------------------------------------------
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║  OBS Optimization — Phase 3 Performance Benchmark Suite              ║" -ForegroundColor Cyan
-Write-Host "║  Results will be saved to:                                            ║" -ForegroundColor Cyan
-Write-Host "║  $($OutputDir.PadRight(68))║" -ForegroundColor Cyan
-Write-Host "╚══════════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host "  OBS Optimization - Phase 3 Performance Benchmark Suite            " -ForegroundColor Cyan
+Write-Host "  Results will be saved to:                                         " -ForegroundColor Cyan
+Write-Host "  $OutputDir" -ForegroundColor Cyan
+Write-Host "====================================================================" -ForegroundColor Cyan
 Write-Host ""
 
 $summaryRows = [System.Collections.Generic.List[hashtable]]::new()
 
-# ── Run each scenario ─────────────────────────────────────────────────────────
+# -- Run each scenario ---------------------------------------------------------
 foreach ($sc in $scenarios) {
 
     Write-Host ""
-    Write-Host ("─" * 72) -ForegroundColor DarkGray
+    Write-Host ("-" * 72) -ForegroundColor DarkGray
     Write-Host $sc.Description -ForegroundColor White
-    Write-Host "Duration: $($sc.Duration) seconds  ($([int]($sc.Duration/60)) min $($sc.Duration % 60) sec)" -ForegroundColor DarkCyan
+    $mins = [int]($sc.Duration / 60)
+    $secs = $sc.Duration % 60
+    Write-Host "Duration: $($sc.Duration) seconds  ($mins min $secs sec)" -ForegroundColor DarkCyan
 
     $resp = Read-Host "Press Enter to START monitoring, or type 'skip' to skip this test"
     if ($resp -ieq "skip") {
@@ -184,7 +186,7 @@ foreach ($sc in $scenarios) {
         "-OutputDir",             $OutputDir
     )
 
-    Write-Host "▶ Monitoring started for '$($sc.Name)' …" -ForegroundColor Green
+    Write-Host "> Monitoring started for '$($sc.Name)' ..." -ForegroundColor Green
     $job = Start-Process -FilePath "powershell.exe" -ArgumentList $args_ -PassThru -NoNewWindow -Wait
 
     # Collect the latest CSV for this scenario and summarise
@@ -218,12 +220,12 @@ foreach ($sc in $scenarios) {
     Read-Host "Configure OBS for the NEXT test, then press Enter to continue"
 }
 
-# ── Final summary table ───────────────────────────────────────────────────────
+# -- Final summary table ------------------------------------------------------
 if ($summaryRows.Count -gt 0) {
     Write-Host ""
-    Write-Host "═══ PHASE 3 BENCHMARK SUMMARY ═══════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "=== PHASE 3 BENCHMARK SUMMARY =========================================" -ForegroundColor Cyan
     Write-Host ("{0,-10} {1,8} {2,8} {3,10} {4,10} {5,8}" -f "Test","AvgCPU%","MaxCPU%","AvgWS(MB)","MaxWS(MB)","Samples") -ForegroundColor White
-    Write-Host ("{0,-10} {1,8} {2,8} {3,10} {4,10} {5,8}" -f "──────────","────────","────────","──────────","──────────","────────") -ForegroundColor DarkGray
+    Write-Host ("{0,-10} {1,8} {2,8} {3,10} {4,10} {5,8}" -f "----------","--------","--------","----------","----------","--------") -ForegroundColor DarkGray
     foreach ($row in $summaryRows) {
         Write-Host ("{0,-10} {1,8} {2,8} {3,10} {4,10} {5,8}" -f $row.Test, $row.AvgCPU, $row.MaxCPU, $row.AvgWS, $row.MaxWS, $row.Samples)
     }

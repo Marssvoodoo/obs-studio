@@ -11,42 +11,82 @@
 ******************************************************************************/
 
 #include <inttypes.h>
+#include <stdint.h>
+#include <string.h>
+
 #include "obs-internal.h"
+#include "util/threading.h"
 #include "util/util_uint64.h"
 #include "util/sse-intrin.h"
 
+#if defined(_M_X64) || defined(_M_IX86) || defined(__x86_64__) || defined(__i386__)
+#define OBS_X86_SIMD 1
+#else
+#define OBS_X86_SIMD 0
+#endif
+
+#if OBS_X86_SIMD
 #ifdef _MSC_VER
 #include <intrin.h>
 #else
+#include <cpuid.h>
 #include <x86intrin.h>
 #endif
+#endif
 
-// Check for AVX2 support at runtime
+#if OBS_X86_SIMD
+// Check for AVX2 support at runtime, including OS support for YMM state.
 static bool cpu_supports_avx2(void)
 {
-	static int avx2_supported = -1;
-	if (avx2_supported == -1) {
+	static volatile long avx2_supported = -1;
+	long cached = os_atomic_load_long(&avx2_supported);
+	if (cached == -1) {
+		long detected;
 #ifdef _MSC_VER
 		int info[4];
 		__cpuid(info, 0);
 		if (info[0] >= 7) {
+			__cpuidex(info, 1, 0);
+			const bool osxsave = (info[2] & (1 << 27)) != 0;
+			const bool avx = (info[2] & (1 << 28)) != 0;
+			unsigned long long xcr0 = 0;
+			if (osxsave && avx)
+				xcr0 = _xgetbv(0);
+			const bool ymm_state = (xcr0 & 0x6) == 0x6;
+
 			__cpuidex(info, 7, 0);
-			avx2_supported = (info[1] & (1 << 5)) ? 1 : 0;
+			detected = ymm_state && (info[1] & (1 << 5)) ? 1 : 0;
 		} else {
-			avx2_supported = 0;
+			detected = 0;
 		}
 #else
 		unsigned int eax, ebx, ecx, edx;
 		if (__get_cpuid_max(0, NULL) >= 7) {
+			__cpuid(1, eax, ebx, ecx, edx);
+			const bool osxsave = (ecx & bit_OSXSAVE) != 0;
+			const bool avx = (ecx & bit_AVX) != 0;
+			uint64_t xcr0 = 0;
+			if (osxsave && avx) {
+				uint32_t xcr0_lo;
+				uint32_t xcr0_hi;
+				__asm__ volatile("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi) : "c"(0));
+				xcr0 = ((uint64_t)xcr0_hi << 32) | xcr0_lo;
+			}
+			const bool ymm_state = (xcr0 & 0x6) == 0x6;
 			__cpuid_count(7, 0, eax, ebx, ecx, edx);
-			avx2_supported = (ebx & (1 << 5)) ? 1 : 0;
+			detected = ymm_state && (ebx & bit_AVX2) ? 1 : 0;
 		} else {
-			avx2_supported = 0;
+			detected = 0;
 		}
 #endif
+		long expected = -1;
+		if (!os_atomic_compare_exchange_long(&avx2_supported, &expected, detected))
+			detected = expected;
+		cached = detected;
 	}
-	return avx2_supported == 1;
+	return cached == 1;
 }
+#endif
 
 /**
  * Optimized audio mixing using SSE2 intrinsics
@@ -56,6 +96,7 @@ static bool cpu_supports_avx2(void)
  * @param aud      Source audio buffer (16-byte aligned preferred)
  * @param count    Number of floats to mix
  */
+#if OBS_X86_SIMD
 static inline void mix_audio_sse2(float *mix, const float *aud, size_t count)
 {
 	size_t i = 0;
@@ -78,8 +119,9 @@ static inline void mix_audio_sse2(float *mix, const float *aud, size_t count)
 		mix[i] += aud[i];
 	}
 }
+#endif
 
-#ifdef __AVX2__
+#if OBS_X86_SIMD && defined(__AVX2__)
 /**
  * Optimized audio mixing using AVX2 intrinsics
  * Processes 8 floats at a time for better throughput
@@ -128,26 +170,18 @@ void mix_audio_optimized(struct audio_output_data *mixes, size_t channels,
                          float *(*audio_buffers)[MAX_AUDIO_CHANNELS],
                          size_t start_point, size_t total_floats)
 {
-#ifdef __AVX2__
-	static bool use_avx2 = false;
-	static bool checked = false;
-	if (!checked) {
-		use_avx2 = cpu_supports_avx2();
-		checked = true;
-	}
-#endif
-
 	for (size_t mix_idx = 0; mix_idx < MAX_AUDIO_MIXES; mix_idx++) {
 		for (size_t ch = 0; ch < channels; ch++) {
 			float *mix = mixes[mix_idx].data[ch] + start_point;
 			float *aud = audio_buffers[mix_idx][ch];
 
 			// Choose best SIMD path based on CPU capabilities
-#ifdef __AVX2__
-			if (use_avx2 && total_floats >= 8) {
+#if OBS_X86_SIMD && defined(__AVX2__)
+			if (cpu_supports_avx2() && total_floats >= 8) {
 				mix_audio_avx2(mix, aud, total_floats);
 			} else
 #endif
+#if OBS_X86_SIMD
 			if (total_floats >= 4) {
 				mix_audio_sse2(mix, aud, total_floats);
 			} else {
@@ -156,6 +190,11 @@ void mix_audio_optimized(struct audio_output_data *mixes, size_t channels,
 					mix[i] += aud[i];
 				}
 			}
+#else
+			for (size_t i = 0; i < total_floats; i++) {
+				mix[i] += aud[i];
+			}
+#endif
 		}
 	}
 }
@@ -181,6 +220,14 @@ void copy_video_plane_optimized(uint8_t *dst, const uint8_t *src,
                                 uint32_t width, uint32_t height,
                                 uint32_t dst_stride, uint32_t src_stride)
 {
+#if !OBS_X86_SIMD
+	for (uint32_t y = 0; y < height; y++) {
+		const uint8_t *src_line = src + (size_t)y * src_stride;
+		uint8_t *dst_line = dst + (size_t)y * dst_stride;
+		memcpy(dst_line, src_line, width);
+	}
+	return;
+#else
 	/* _mm_stream_si128 requires 16-byte aligned destination.
 	 * Check once on the base pointer; if stride is also a multiple of 16
 	 * then every subsequent line will also be aligned. */
@@ -278,6 +325,7 @@ void copy_video_plane_optimized(uint8_t *dst, const uint8_t *src,
 
 	if (need_sfence)
 		_mm_sfence();
+#endif
 }
 
 /**
@@ -289,7 +337,7 @@ void zero_audio_buffer_optimized(float *buffer, size_t count)
 	size_t i = 0;
 	const size_t simd_count = count & ~7; // Round down to multiple of 8
 	
-#ifdef __AVX2__
+#if OBS_X86_SIMD && defined(__AVX2__)
 	if (cpu_supports_avx2() && count >= 8) {
 		__m256 zero = _mm256_setzero_ps();
 		for (i = 0; i < simd_count; i += 8) {
@@ -298,11 +346,13 @@ void zero_audio_buffer_optimized(float *buffer, size_t count)
 	} else
 #endif
 	{
+#if OBS_X86_SIMD
 		__m128 zero = _mm_setzero_ps();
 		const size_t sse_count = count & ~3;
 		for (i = 0; i < sse_count; i += 4) {
 			_mm_storeu_ps(&buffer[i], zero);
 		}
+#endif
 	}
 	
 	// Handle remaining elements
