@@ -4,6 +4,26 @@ echo OBS Studio - Optimized Build Script
 echo ============================================
 echo.
 
+REM Auto-detect cmake
+where cmake >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: cmake not found in PATH.
+    echo Run this from "Developer Command Prompt for VS" or add cmake to PATH.
+    pause
+    exit /b 1
+)
+
+REM Set dependency paths relative to project root
+set "PROJECT_ROOT=%~dp0"
+set "DEPS_DIR=%PROJECT_ROOT%.deps"
+
+if not exist "%DEPS_DIR%" (
+    echo ERROR: Dependencies not found at %DEPS_DIR%
+    echo Run the dependency setup first.
+    pause
+    exit /b 1
+)
+
 REM Check if build directory exists
 if not exist "build" (
     echo Creating build directory...
@@ -18,17 +38,13 @@ echo Step 1: Running CMake Configuration
 echo ============================================
 echo.
 
-REM Configure with CMake (Release build for optimizations)
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CONFIGURATION_TYPES=Release
+cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_CONFIGURATION_TYPES=Release ^
+  -DCMAKE_PREFIX_PATH="%DEPS_DIR%/obs-deps-2025-08-23-x64;%DEPS_DIR%/obs-deps-qt6-2025-08-23-x64" ^
+  -DENABLE_BROWSER=ON
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo ERROR: CMake configuration failed!
-    echo.
-    echo Common fixes:
-    echo 1. Make sure CMake is installed and in PATH
-    echo 2. Check that all dependencies are available
-    echo 3. Run this from "Developer Command Prompt for VS"
     echo.
     pause
     exit /b 1
@@ -40,8 +56,7 @@ echo Step 2: Building OBS (This may take a while)
 echo ============================================
 echo.
 
-REM Build the project
-cmake --build . --config Release -j
+cmake --build . --config Release --parallel %NUMBER_OF_PROCESSORS%
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
@@ -57,15 +72,6 @@ echo ============================================
 echo BUILD SUCCESSFUL!
 echo ============================================
 echo.
-echo The optimized OBS build is in: build\rundir\Release\bin
-echo.
-echo To run OBS with optimizations:
-echo   cd build\rundir\Release\bin
-echo   obs64.exe
-echo.
-echo Next steps:
-echo 1. Test the build to ensure it works
-echo 2. Compare CPU usage with original build
-echo 3. See NEXT_STEPS.md for performance testing
+echo The optimized OBS build is in: build\rundir\Release\bin\64bit
 echo.
 pause

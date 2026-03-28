@@ -28,6 +28,7 @@
 #if OBS_X86_SIMD
 #ifdef _MSC_VER
 #include <intrin.h>
+#include <immintrin.h>
 #else
 #include <cpuid.h>
 #include <x86intrin.h>
@@ -121,23 +122,23 @@ static inline void mix_audio_sse2(float *mix, const float *aud, size_t count)
 }
 #endif
 
-#if OBS_X86_SIMD && defined(__AVX2__)
-/**
- * Optimized audio mixing using AVX2 intrinsics
- * Processes 8 floats at a time for better throughput
- * 
- * @param mix      Destination mix buffer (32-byte aligned preferred)
- * @param aud      Source audio buffer (32-byte aligned preferred)
- * @param count    Number of floats to mix
+#if OBS_X86_SIMD
+/*
+ * AVX2 audio mixing — processes 8 floats per iteration.
+ *
+ * On MSVC, AVX2 intrinsics are available without /arch:AVX2 (the compiler
+ * emits the VEX-encoded instruction inline).  On GCC/Clang we need an
+ * explicit target attribute so the compiler allows the intrinsics.
  */
+#if !defined(_MSC_VER)
+__attribute__((target("avx2")))
+#endif
 static inline void mix_audio_avx2(float *mix, const float *aud, size_t count)
 {
 	size_t i = 0;
-	const size_t simd_count = count & ~7; // Round down to multiple of 8
+	const size_t simd_count = count & ~(size_t)7;
 
-	// Process 8 floats at a time with AVX2
 	for (i = 0; i < simd_count; i += 8) {
-		// Prefetch next cache line (64 bytes ahead)
 		_mm_prefetch((const char *)(aud + i + 16), _MM_HINT_T0);
 		_mm_prefetch((const char *)(mix + i + 16), _MM_HINT_T0);
 
@@ -147,7 +148,8 @@ static inline void mix_audio_avx2(float *mix, const float *aud, size_t count)
 		_mm256_storeu_ps(&mix[i], v_result);
 	}
 
-	// Handle remaining elements (0-7)
+	_mm256_zeroupper(); /* Avoid AVX-SSE transition penalty */
+
 	for (; i < count; i++) {
 		mix[i] += aud[i];
 	}
@@ -176,7 +178,7 @@ void mix_audio_optimized(struct audio_output_data *mixes, size_t channels,
 			float *aud = audio_buffers[mix_idx][ch];
 
 			// Choose best SIMD path based on CPU capabilities
-#if OBS_X86_SIMD && defined(__AVX2__)
+#if OBS_X86_SIMD
 			if (cpu_supports_avx2() && total_floats >= 8) {
 				mix_audio_avx2(mix, aud, total_floats);
 			} else
@@ -345,12 +347,13 @@ void zero_audio_buffer_optimized(float *buffer, size_t count)
 	size_t i = 0;
 	const size_t simd_count = count & ~7; // Round down to multiple of 8
 	
-#if OBS_X86_SIMD && defined(__AVX2__)
+#if OBS_X86_SIMD
 	if (cpu_supports_avx2() && count >= 8) {
 		__m256 zero = _mm256_setzero_ps();
 		for (i = 0; i < simd_count; i += 8) {
 			_mm256_storeu_ps(&buffer[i], zero);
 		}
+		_mm256_zeroupper();
 	} else
 #endif
 	{

@@ -44,9 +44,20 @@ static inline size_t align64(size_t sz)
 
 /* Allocate one arena of n_blocks blocks and push all blocks onto the
  * pool's free list.  Returns false on allocation failure. */
+/* Maximum blocks per arena — prevents unbounded geometric growth. */
+#define MAX_ARENA_BLOCKS 65536u
+
 static bool pool_grow(struct obs_audio_pool *pool, size_t n_blocks)
 {
 	const size_t block_sz = pool->block_size;
+
+	if (n_blocks > MAX_ARENA_BLOCKS)
+		n_blocks = MAX_ARENA_BLOCKS;
+
+	/* Guard against size_t overflow in the multiplication. */
+	if (block_sz > 0 && n_blocks > (SIZE_MAX - sizeof(struct pool_arena) -
+	                                 POOL_ALIGNMENT) / block_sz)
+		return false;
 
 	/* Allocate the arena header + extra POOL_ALIGNMENT bytes so we can
 	 * align the data region manually even if the system allocator does

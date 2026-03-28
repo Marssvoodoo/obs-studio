@@ -1013,6 +1013,31 @@ static void obs_free_audio(void)
 	pthread_mutex_destroy(&audio->task_mutex);
 	pthread_mutex_destroy(&audio->monitoring_mutex);
 
+	/* Disconnect signal handlers to prevent callbacks into zeroed memory.
+	 * On final shutdown (destroying_core_data) we disconnect everything;
+	 * on audio reset we preserve graph hooks (they are re-used). */
+	if (destroying_core_data && graph_hooks_connected && obs->signals) {
+		static const char *graph_signals[] = {
+			"source_create", "source_create_canvas",
+			"source_remove", "source_destroy",
+			"source_activate", "source_deactivate",
+			"source_audio_activate", "source_audio_deactivate",
+			"source_filter_add", "source_filter_remove",
+			"channel_change", "canvas_create", "canvas_remove",
+			"canvas_video_reset", "video_reset", NULL,
+		};
+		for (size_t i = 0; graph_signals[i]; i++)
+			signal_handler_disconnect(obs->signals,
+						  graph_signals[i],
+						  mark_audio_graph_dirty,
+						  NULL);
+		signal_handler_disconnect(obs->signals,
+					  "deduplication_changed",
+					  apply_monitoring_deduplication,
+					  NULL);
+		graph_hooks_connected = false;
+	}
+
 	/* The global audio pools and render thread pool outlive audio resets.
 	 * Existing sources keep pointers into these allocations, so they may
 	 * only be destroyed once source data has been torn down.

@@ -9,6 +9,7 @@
 
 #include "obs-audio-threaded.h"
 #include "util/threading.h"
+#include <limits.h>
 #include "util/bmem.h"
 #include "util/base.h"
 #include "util/platform.h"
@@ -24,7 +25,7 @@ struct obs_audio_threadpool {
 	pthread_mutex_t work_mutex;
 	pthread_cond_t work_cond;
 	pthread_cond_t done_cond;
-	bool shutdown;
+	volatile bool shutdown;
 
 	const struct audio_job *jobs;
 	volatile long num_jobs;
@@ -198,6 +199,9 @@ void obs_audio_threadpool_run(struct obs_audio_threadpool *pool,
 		return;
 	}
 
+	/* Clamp to LONG_MAX to prevent truncation on LLP64 (Windows). */
+	if (num_jobs > (size_t)LONG_MAX)
+		num_jobs = (size_t)LONG_MAX;
 	long batch_size = (long)num_jobs;
 	long cur_peak;
 	do {
@@ -235,9 +239,8 @@ size_t obs_audio_threadpool_num_threads(const struct obs_audio_threadpool *pool)
 
 size_t obs_audio_threadpool_peak_batch_size(const struct obs_audio_threadpool *pool)
 {
-	return pool ? (size_t)os_atomic_load_long(
-			      (volatile long *)&pool->peak_batch_size)
-		    : 0;
+	/* peak_batch_size is volatile long — safe to read directly. */
+	return pool ? (size_t)pool->peak_batch_size : 0;
 }
 
 void obs_audio_threadpool_reset_stats(struct obs_audio_threadpool *pool)

@@ -576,18 +576,18 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 		if (!intervalOk || intervalMs < 250)
 			intervalMs = 1000;
 
-		const QString perfExportPath =
-			QFileInfo(QString::fromUtf8(perfExportCsv))
-				.absoluteFilePath();
-
-		/* Reject paths with traversal sequences or UNC prefixes */
-		if (perfExportPath.contains(QStringLiteral("..")) ||
-		    perfExportPath.startsWith(QStringLiteral("\\\\")) ||
-		    perfExportPath.startsWith(QStringLiteral("//"))) {
+		/* Validate the RAW input BEFORE canonicalization
+		 * (absoluteFilePath resolves ".." making post-checks useless) */
+		const QString rawPath = QString::fromUtf8(perfExportCsv);
+		if (rawPath.contains(QStringLiteral("..")) ||
+		    rawPath.startsWith(QStringLiteral("\\\\")) ||
+		    rawPath.startsWith(QStringLiteral("//"))) {
 			blog(LOG_WARNING,
 			     "OBS_PERF_EXPORT_CSV rejected (unsafe path): %s",
 			     perfExportCsv.constData());
 		} else {
+			const QString perfExportPath =
+				QFileInfo(rawPath).absoluteFilePath();
 			const uint64_t exportStartNs = os_gettime_ns();
 			QTimer *perfExportTimer = new QTimer(this);
 			connect(perfExportTimer, &QTimer::timeout, this,

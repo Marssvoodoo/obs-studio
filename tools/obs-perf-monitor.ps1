@@ -98,10 +98,10 @@ function Get-AppRowsInWindow($csvPath, [datetime]$startUtc, [datetime]$endUtc) {
 
 # -- Locate OBS process -------------------------------------------------------
 $processName = "obs64"
-$proc = Get-Process -Name $processName -ErrorAction SilentlyContinue
+$proc = Get-Process -Name $processName -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $proc) {
     $processName = "obs32"
-    $proc = Get-Process -Name $processName -ErrorAction SilentlyContinue
+    $proc = Get-Process -Name $processName -ErrorAction SilentlyContinue | Select-Object -First 1
 }
 if (-not $proc) {
     Write-Error "OBS process (obs64 / obs32) not found. Launch OBS first, then run this script."
@@ -109,7 +109,23 @@ if (-not $proc) {
 }
 
 $pid_ = $proc.Id
-Write-Host "Monitoring $processName (PID $pid_) ..." -ForegroundColor Cyan
+
+# Resolve the correct PerformanceCounter instance name for this PID.
+# When multiple processes share the same name, Windows appends #1, #2, etc.
+$counterInstanceName = $processName
+$category = New-Object System.Diagnostics.PerformanceCounterCategory("Process")
+$instances = $category.GetInstanceNames() | Where-Object { $_ -like "$processName*" }
+foreach ($inst in $instances) {
+    try {
+        $pidCounter = New-Object System.Diagnostics.PerformanceCounter("Process", "ID Process", $inst, $true)
+        if ($pidCounter.NextValue() -eq $pid_) {
+            $counterInstanceName = $inst
+            break
+        }
+    } catch { }
+}
+
+Write-Host "Monitoring $processName (PID $pid_, counter=$counterInstanceName) ..." -ForegroundColor Cyan
 
 # -- Prepare output CSV -------------------------------------------------------
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
@@ -138,7 +154,7 @@ Write-Host ("{0,-24} {1,7} {2,8} {3,12} {4,10}" -f "Time","CPU%","WS(MB)","Priva
 Write-Host ("-" * 72)
 
 # -- CPU counter helper -------------------------------------------------------
-$cpuCounter  = New-Object System.Diagnostics.PerformanceCounter("Process", "% Processor Time", $processName, $true)
+$cpuCounter  = New-Object System.Diagnostics.PerformanceCounter("Process", "% Processor Time", $counterInstanceName, $true)
 $null = $cpuCounter.NextValue()
 Start-Sleep -Milliseconds 500
 

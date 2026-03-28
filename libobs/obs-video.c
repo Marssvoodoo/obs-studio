@@ -650,6 +650,9 @@ static inline bool download_frame(struct obs_core_video_mix *video, int prev_tex
 static const uint8_t *set_gpu_converted_plane(uint32_t width, uint32_t height, uint32_t linesize_input,
 					      uint32_t linesize_output, const uint8_t *in, uint8_t *out)
 {
+	if (!in || !out)
+		return in;
+
 	/* Use SIMD-accelerated copy (SSE2/AVX + NT stores for large planes).
 	 * The optimized function mirrors the same contiguous/strided logic as
 	 * the original memcpy loops but processes 16–64 bytes per iteration.

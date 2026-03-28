@@ -22,7 +22,7 @@ extern void copy_video_plane_optimized(uint8_t *dst, const uint8_t *src,
 				       uint32_t dst_stride, uint32_t src_stride);
 
 #define HALF(size) ((size + 1) / 2)
-#define ALIGN(size, alignment) *size = (*size + alignment - 1) & (~(alignment - 1));
+#define ALIGN(size, alignment) *(size) = (*(size) + (alignment) - 1) & (~((alignment) - 1));
 
 static inline void align_size(size_t *size, size_t alignment)
 {
@@ -255,6 +255,8 @@ void video_frame_copy(struct video_frame *dst, const struct video_frame *src, en
 	/* copy each plane */
 	for (uint32_t i = 0; i < MAX_AV_PLANES; i++) {
 		if (!heights[i])
+			continue;
+		if (!src->data[i] || !dst->data[i])
 			continue;
 
 		uint32_t linesize = src->linesize[i] < dst->linesize[i]

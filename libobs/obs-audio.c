@@ -596,7 +596,8 @@ static void record_audio_callback_stats(struct obs_core_audio *audio,
 					size_t parallel_jobs)
 {
 	long elapsed_ns = (long)(os_gettime_ns() - callback_start_ns);
-	long samples = os_atomic_load_long(&audio->callback_samples) + 1;
+	long raw_samples = os_atomic_load_long(&audio->callback_samples);
+	long samples = (raw_samples < LONG_MAX) ? raw_samples + 1 : raw_samples;
 	long avg_ns = os_atomic_load_long(&audio->callback_avg_ns);
 	long max_ns = os_atomic_load_long(&audio->callback_max_ns);
 	long peak_jobs = os_atomic_load_long(&audio->peak_parallel_jobs);
