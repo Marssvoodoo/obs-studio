@@ -32,6 +32,7 @@ target_sources(
     obs-audio-controls.h
     obs-audio.c
     obs-audio-optimized.c
+    obs-audio-optimized-avx2.c
     obs-audio-pool.c
     obs-audio-pool.h
     obs-audio-threaded.c
@@ -234,13 +235,13 @@ endif()
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64|i[3-6]86|x86)$")
   if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
-    set_source_files_properties(obs-audio-optimized.c PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+    set_source_files_properties(obs-audio-optimized-avx2.c PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
   elseif(
     CMAKE_C_COMPILER_ID STREQUAL "GNU"
     OR CMAKE_C_COMPILER_ID STREQUAL "Clang"
     OR CMAKE_C_COMPILER_ID STREQUAL "AppleClang"
   )
-    set_source_files_properties(obs-audio-optimized.c PROPERTIES COMPILE_OPTIONS "-mavx2")
+    set_source_files_properties(obs-audio-optimized-avx2.c PROPERTIES COMPILE_OPTIONS "-mavx2")
   endif()
 endif()
 

@@ -25,7 +25,7 @@ struct obs_audio_threadpool {
 	pthread_mutex_t work_mutex;
 	pthread_cond_t work_cond;
 	pthread_cond_t done_cond;
-	volatile bool shutdown;
+	bool shutdown;
 
 	const struct audio_job *jobs;
 	volatile long num_jobs;
@@ -83,10 +83,10 @@ static void *worker_thread(void *arg)
 
 	while (true) {
 		pthread_mutex_lock(&pool->work_mutex);
-		while (!pool->shutdown &&
+		while (!os_atomic_load_bool(&pool->shutdown) &&
 		       os_atomic_load_long(&pool->batch_serial) == seen_serial)
 			pthread_cond_wait(&pool->work_cond, &pool->work_mutex);
-		if (pool->shutdown) {
+		if (os_atomic_load_bool(&pool->shutdown)) {
 			pthread_mutex_unlock(&pool->work_mutex);
 			break;
 		}
@@ -128,7 +128,7 @@ struct obs_audio_threadpool *obs_audio_threadpool_create(size_t num_threads,
 	}
 
 	pool->num_threads = num_threads;
-	pool->shutdown = false;
+	os_atomic_set_bool(&pool->shutdown, false);
 	pool->jobs = NULL;
 	pool->num_jobs = 0;
 	pool->next_job = 0;
@@ -144,7 +144,7 @@ struct obs_audio_threadpool *obs_audio_threadpool_create(size_t num_threads,
 		if (pthread_create(&pool->threads[i], NULL, worker_thread,
 				   pool) != 0) {
 			pthread_mutex_lock(&pool->work_mutex);
-			pool->shutdown = true;
+			os_atomic_set_bool(&pool->shutdown, true);
 			pthread_cond_broadcast(&pool->work_cond);
 			pthread_mutex_unlock(&pool->work_mutex);
 			for (size_t j = 0; j < i; j++)
@@ -173,7 +173,7 @@ void obs_audio_threadpool_destroy(struct obs_audio_threadpool *pool)
 	pthread_mutex_lock(&pool->work_mutex);
 	while (os_atomic_load_long(&pool->pending) > 0)
 		pthread_cond_wait(&pool->done_cond, &pool->work_mutex);
-	pool->shutdown = true;
+	os_atomic_set_bool(&pool->shutdown, true);
 	pthread_cond_broadcast(&pool->work_cond);
 	pthread_mutex_unlock(&pool->work_mutex);
 

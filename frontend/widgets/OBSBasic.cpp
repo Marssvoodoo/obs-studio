@@ -581,7 +581,11 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 		const QString rawPath = QString::fromUtf8(perfExportCsv);
 		if (rawPath.contains(QStringLiteral("..")) ||
 		    rawPath.startsWith(QStringLiteral("\\\\")) ||
-		    rawPath.startsWith(QStringLiteral("//"))) {
+		    rawPath.startsWith(QStringLiteral("//")) ||
+		    rawPath.contains(QStringLiteral("::$")) ||
+		    rawPath.contains(QStringLiteral("%2e"), Qt::CaseInsensitive) ||
+		    rawPath.contains(QStringLiteral("%2f"), Qt::CaseInsensitive) ||
+		    rawPath.contains(QStringLiteral("%5c"), Qt::CaseInsensitive)) {
 			blog(LOG_WARNING,
 			     "OBS_PERF_EXPORT_CSV rejected (unsafe path): %s",
 			     perfExportCsv.constData());

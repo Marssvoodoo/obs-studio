@@ -49,6 +49,13 @@ struct spsc_queue {
 
 	/* Producer writes head; consumer reads it. */
 	/* Consumer writes tail; producer reads it. */
+	/*
+	 * Note: head/tail use _Atomic / std::atomic directly (rather than
+	 * os_atomic_* wrappers) because the SPSC algorithm requires explicit
+	 * acquire/release memory ordering on each load/store.  The os_atomic_*
+	 * helpers only provide sequentially-consistent or relaxed semantics,
+	 * which would be either too expensive or too weak here.
+	 */
 #ifdef __cplusplus
 	std::atomic<size_t> head;
 	std::atomic<size_t> tail;

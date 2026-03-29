@@ -158,11 +158,12 @@ void *obs_audio_pool_alloc(struct obs_audio_pool *pool)
 
 	void *block      = pool->free_list;
 	pool->free_list  = *(void **)block;
+	const size_t bsz = pool->block_size;
 
 	pthread_mutex_unlock(&pool->lock);
 
 	/* Zero the block before handing it out (audio buffers must start 0). */
-	memset(block, 0, pool->block_size);
+	memset(block, 0, bsz);
 	return block;
 }
 

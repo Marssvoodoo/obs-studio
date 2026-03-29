@@ -41,6 +41,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Sanitize ScenarioName — reject path separators and traversal sequences
+if ($ScenarioName -match '[/\\]|\.\.') {
+    Write-Error "ScenarioName contains invalid characters (/, \, or ..): '$ScenarioName'"
+    return
+}
+$ScenarioName = $ScenarioName -replace '[<>:"|?*]', '_'
+
 function Get-Stats($arr) {
     if (-not $arr -or $arr.Count -eq 0) {
         return @{ Min = 0; Max = 0; Avg = 0; P95 = 0 }

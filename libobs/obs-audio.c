@@ -583,6 +583,15 @@ static bool ensure_render_jobs_capacity(struct obs_core_audio *audio, size_t cou
 		       audio->render_jobs_capacity * sizeof(struct audio_job));
 	}
 
+	/* Zero newly-added slots so they don't contain stale data. */
+	if (new_cap > audio->render_jobs_capacity) {
+		size_t old_cap = audio->render_jobs_capacity;
+		memset(new_jobs + old_cap, 0,
+		       (new_cap - old_cap) * sizeof(struct audio_render_job));
+		memset(new_batch + old_cap, 0,
+		       (new_cap - old_cap) * sizeof(struct audio_job));
+	}
+
 	bfree(audio->render_jobs);
 	bfree(audio->render_job_batch);
 	audio->render_jobs = new_jobs;
@@ -700,7 +709,14 @@ static inline bool can_parallel_render_source(const obs_source_t *source)
 	return true;
 }
 
-/* Called from worker threads — only touches source-private buffers. */
+/* Called from worker threads — only touches source-private buffers.
+ *
+ * THREAD-SAFETY ASSUMPTION: source audio_render callbacks dispatched here
+ * run in parallel on thread-pool workers and MUST be thread-safe.  Only
+ * "simple" sources are parallelised — those without audio_render/audio_mix
+ * callbacks and without COMPOSITE or SUBMIX flags (see
+ * can_parallel_render_source()).  Such sources operate exclusively on their
+ * own private buffers, so no cross-source synchronisation is required. */
 static void do_audio_render_job(void *param)
 {
 	struct audio_render_job *j = (struct audio_render_job *)param;
