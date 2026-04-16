@@ -20,8 +20,19 @@
 
 void gs_texture_2d::InitSRD(std::vector<D3D11_SUBRESOURCE_DATA> &srd)
 {
-	uint32_t rowSizeBytes = width * gs_get_format_bpp(format);
-	uint32_t texSizeBytes = (uint32_t)((uint64_t)height * rowSizeBytes / 8);
+	/* Compute row/tex sizes in 64-bit to catch overflow before it
+	 * silently wraps in 32-bit arithmetic.  16K-wide R32G32B32A32 fits;
+	 * cubemap arrays of huge dimensions would not. */
+	uint64_t rowSizeBits64 = (uint64_t)width * gs_get_format_bpp(format);
+	uint64_t texSizeBytes64 = (uint64_t)height * rowSizeBits64 / 8;
+	if (rowSizeBits64 > UINT32_MAX || texSizeBytes64 > UINT32_MAX) {
+		blog(LOG_ERROR, "gs_texture_2d::InitSRD: dimensions %ux%u "
+				"exceed 32-bit byte arithmetic — refusing to "
+				"populate SRD", width, height);
+		return;
+	}
+	uint32_t rowSizeBytes = (uint32_t)rowSizeBits64;
+	uint32_t texSizeBytes = (uint32_t)texSizeBytes64;
 	size_t textures = type == GS_TEXTURE_2D ? 1 : 6;
 	uint32_t actual_levels = levels;
 	size_t curTex = 0;

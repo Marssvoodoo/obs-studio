@@ -3,6 +3,7 @@
  ******************************************************************************/
 
 #include "obs-audio-pool.h"
+#include "util/base.h"
 #include "util/bmem.h"
 #include "util/threading.h"
 
@@ -34,6 +35,8 @@ struct obs_audio_pool {
 	void              *free_list;   /* head of free block linked list   */
 	struct pool_arena *arenas;      /* singly-linked arena chain        */
 	size_t             block_size;  /* padded block size (multiple of 64) */
+	size_t             total_blocks;/* sum of arena->n_blocks            */
+	size_t             outstanding; /* blocks currently handed out       */
 };
 
 /* Round sz up to the next multiple of POOL_ALIGNMENT. */
@@ -88,6 +91,7 @@ static bool pool_grow(struct obs_audio_pool *pool, size_t n_blocks)
 		pool->free_list  = block;
 	}
 
+	pool->total_blocks += n_blocks;
 	return true;
 }
 
@@ -127,6 +131,14 @@ void obs_audio_pool_destroy(struct obs_audio_pool *pool)
 
 	pthread_mutex_lock(&pool->lock);
 
+	if (pool->outstanding != 0) {
+		blog(LOG_WARNING,
+		     "obs_audio_pool_destroy: %zu of %zu blocks still "
+		     "outstanding (block_size=%zu) — possible leak or "
+		     "use-after-free",
+		     pool->outstanding, pool->total_blocks, pool->block_size);
+	}
+
 	struct pool_arena *arena = pool->arenas;
 	while (arena) {
 		struct pool_arena *next = arena->next;
@@ -159,6 +171,7 @@ void *obs_audio_pool_alloc(struct obs_audio_pool *pool)
 	void *block      = pool->free_list;
 	pool->free_list  = *(void **)block;
 	const size_t bsz = pool->block_size;
+	pool->outstanding++;
 
 	pthread_mutex_unlock(&pool->lock);
 
@@ -175,6 +188,8 @@ void obs_audio_pool_free(struct obs_audio_pool *pool, void *ptr)
 	pthread_mutex_lock(&pool->lock);
 	*(void **)ptr   = pool->free_list;
 	pool->free_list = ptr;
+	if (pool->outstanding > 0)
+		pool->outstanding--;
 	pthread_mutex_unlock(&pool->lock);
 }
 

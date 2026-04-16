@@ -14,6 +14,13 @@
 #include "util/base.h"
 #include "util/platform.h"
 
+#if defined(_M_IX86) || defined(_M_X64) || defined(__i386__) || defined(__x86_64__)
+#include <immintrin.h>  /* _mm_pause for CAS-loop spin hint */
+#define OBS_AUDIO_CPU_PAUSE() _mm_pause()
+#else
+#define OBS_AUDIO_CPU_PAUSE() ((void)0)
+#endif
+
 /* ── Constants ───────────────────────────────────────────────────────────── */
 #define MAX_THREADS 16u
 
@@ -46,8 +53,13 @@ static bool claim_job(struct obs_audio_threadpool *pool, struct audio_job *job)
 		if (idx >= os_atomic_load_long(&pool->num_jobs))
 			return false;
 
-		if (!os_atomic_compare_swap_long(&pool->next_job, idx, idx + 1))
+		if (!os_atomic_compare_swap_long(&pool->next_job, idx, idx + 1)) {
+			/* Hyperthread sibling lost the CAS race; yield the
+			 * pipeline so the winner can make progress and we
+			 * don't hammer the cache line. */
+			OBS_AUDIO_CPU_PAUSE();
 			continue;
+		}
 
 		*job = pool->jobs[idx];
 		return true;

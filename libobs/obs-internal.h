@@ -481,6 +481,10 @@ struct obs_core_audio {
 	struct audio_render_job *render_jobs;
 	size_t render_jobs_capacity;
 	bool graph_hooks_connected;
+	/* Sticky once we have tried to create the render pool, so a transient
+	 * pthread_create failure (e.g., RLIMIT_NPROC) doesn't cause the audio
+	 * callback to retry creation 60×/sec and spam the log. */
+	bool render_pool_create_attempted;
 	volatile long graph_dirty;
 	volatile long graph_rebuilds;
 	volatile long callback_last_ns;
@@ -901,6 +905,13 @@ struct obs_source {
 	DARRAY(struct audio_action) audio_actions;
 	float *audio_output_buf[MAX_AUDIO_MIXES][MAX_AUDIO_CHANNELS];
 	float *audio_mix_buf[MAX_AUDIO_CHANNELS];
+	/* Pool that allocated the buffers above, captured at allocation time.
+	 * NULL means the buffer was heap-allocated (bzalloc) before the global
+	 * pool existed.  Tracked per-source to prevent freeing a heap pointer
+	 * back to the pool's free list (heap corruption) when the global pool
+	 * is created between source allocate and source destroy. */
+	struct obs_audio_pool *audio_output_buf_pool;
+	struct obs_audio_pool *audio_mix_buf_pool;
 	struct resample_info sample_info;
 	audio_resampler_t *resampler;
 	pthread_mutex_t audio_actions_mutex;

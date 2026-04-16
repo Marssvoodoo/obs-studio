@@ -884,8 +884,14 @@ void set_monitoring_duplication_source(void *param)
 {
 	obs_source_t *src = param;
 	struct obs_core_audio *audio = &obs->audio;
+	obs_source_t *old = audio->monitoring_duplicating_source;
 
+	/* Take ownership of the ref the dispatcher added; release the old
+	 * one we held.  This guarantees the audio worker dereferencing the
+	 * pointer between batches always sees a live source. */
 	audio->monitoring_duplicating_source = src;
+	if (old)
+		obs_source_release(old);
 }
 
 static void apply_monitoring_deduplication(void *ignored, calldata_t *cd)
@@ -893,6 +899,11 @@ static void apply_monitoring_deduplication(void *ignored, calldata_t *cd)
 	UNUSED_PARAMETER(ignored);
 	obs_source_t *src = calldata_ptr(cd, "source");
 
+	/* Pin the source until the audio task consumes it.  The signal
+	 * caller's calldata is freed when this function returns, so without
+	 * this addref the queued task could deref a destroyed source. */
+	if (src)
+		obs_source_addref(src);
 	obs_queue_task(OBS_TASK_AUDIO, set_monitoring_duplication_source, src, false);
 }
 
@@ -911,6 +922,7 @@ static bool obs_init_audio(struct audio_output_info *ai)
 	int errorcode;
 
 	pthread_mutex_init_value(&audio->monitoring_mutex);
+	pthread_mutex_init_value(&audio->task_mutex);
 
 	if (pthread_mutex_init_recursive(&audio->monitoring_mutex) != 0)
 		return false;
@@ -995,28 +1007,18 @@ static void obs_free_audio(void)
 	struct obs_audio_threadpool *render_pool = audio->render_pool;
 	bool graph_hooks_connected = audio->graph_hooks_connected;
 	const bool destroying_core_data = !obs->data.valid;
+
+	/* Stop the audio thread first so no new render dispatches start. */
 	if (audio->audio)
 		audio_output_close(audio->audio);
 
-	deque_free(&audio->buffered_timestamps);
-	for (size_t i = 0; i < audio->render_order.num; i++)
-		obs_source_release(audio->render_order.array[i]);
-	da_free(audio->render_order);
-	da_free(audio->root_nodes);
-	bfree(audio->render_job_batch);
-	bfree(audio->render_jobs);
-
-	da_free(audio->monitors);
-	bfree(audio->monitoring_device_name);
-	bfree(audio->monitoring_device_id);
-	deque_free(&audio->tasks);
-	pthread_mutex_destroy(&audio->task_mutex);
-	pthread_mutex_destroy(&audio->monitoring_mutex);
-
-	/* Disconnect signal handlers to prevent callbacks into zeroed memory.
-	 * On final shutdown (destroying_core_data) we disconnect everything;
-	 * on audio reset we preserve graph hooks (they are re-used). */
-	if (destroying_core_data && graph_hooks_connected && obs->signals) {
+	/* Disconnect signal callbacks BEFORE destroying any mutex they
+	 * touch.  On non-destroying reset we used to leave hooks connected
+	 * "for re-use" — but apply_monitoring_deduplication queues onto
+	 * task_mutex which is about to be destroyed, so any signal firing
+	 * mid-reset would dereference a destroyed mutex.  obs_init_audio
+	 * reconnects these hooks based on graph_hooks_connected==false. */
+	if (graph_hooks_connected && obs->signals) {
 		static const char *graph_signals[] = {
 			"source_create", "source_create_canvas",
 			"source_remove", "source_destroy",
@@ -1038,19 +1040,47 @@ static void obs_free_audio(void)
 		graph_hooks_connected = false;
 	}
 
-	/* The global audio pools and render thread pool outlive audio resets.
-	 * Existing sources keep pointers into these allocations, so they may
-	 * only be destroyed once source data has been torn down.
+	/* Destroy the worker pool BEFORE freeing its parameter buffers.
+	 * obs_audio_threadpool_destroy joins all workers, ensuring none of
+	 * them still hold pointers into render_jobs / render_job_batch.
 	 *
-	 * SAFETY: destroying_core_data is true only when obs->data.valid is
-	 * false, which means obs_free_data() has already run and destroyed
-	 * all sources (see obs_shutdown sequence).  No source can hold a
-	 * live reference to these pools at this point. */
+	 * The pool is destroyed only on final shutdown — on audio reset the
+	 * pool is preserved across the reset (workers idle waiting for the
+	 * next batch_serial bump). */
 	if (destroying_core_data) {
 		obs_audio_threadpool_destroy(render_pool);
+		render_pool = NULL;
+	}
+
+	/* Release the ref we hold on the dedup source so it can be destroyed. */
+	if (audio->monitoring_duplicating_source) {
+		obs_source_release(audio->monitoring_duplicating_source);
+		audio->monitoring_duplicating_source = NULL;
+	}
+
+	deque_free(&audio->buffered_timestamps);
+	for (size_t i = 0; i < audio->render_order.num; i++)
+		obs_source_release(audio->render_order.array[i]);
+	da_free(audio->render_order);
+	da_free(audio->root_nodes);
+	bfree(audio->render_job_batch);
+	bfree(audio->render_jobs);
+
+	da_free(audio->monitors);
+	bfree(audio->monitoring_device_name);
+	bfree(audio->monitoring_device_id);
+	deque_free(&audio->tasks);
+	pthread_mutex_destroy(&audio->task_mutex);
+	pthread_mutex_destroy(&audio->monitoring_mutex);
+
+	/* The global audio pools outlive audio resets.  Existing sources
+	 * keep pointers into these allocations (and now also store the pool
+	 * pointer they were allocated from, so heap/pool can't get crossed
+	 * — see allocate_audio_output_buffer), so the pools may only be
+	 * destroyed once source data has been torn down. */
+	if (destroying_core_data) {
 		obs_audio_pool_destroy(output_buf_pool);
 		obs_audio_pool_destroy(mix_buf_pool);
-		render_pool = NULL;
 		output_buf_pool = NULL;
 		mix_buf_pool = NULL;
 	}
@@ -1061,7 +1091,7 @@ static void obs_free_audio(void)
 		audio->output_buf_pool = output_buf_pool;
 		audio->mix_buf_pool = mix_buf_pool;
 		audio->render_pool = render_pool;
-		audio->graph_hooks_connected = graph_hooks_connected;
+		audio->graph_hooks_connected = false;
 		audio->graph_dirty = 1;
 	}
 }

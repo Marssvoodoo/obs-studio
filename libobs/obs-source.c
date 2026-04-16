@@ -174,14 +174,17 @@ static void allocate_audio_output_buffer(struct obs_source *source)
 {
 	/* Use the pre-allocated, 64-byte-aligned pool when available
 	 * (Phase 2 optimisation).  Fall back to plain heap allocation if the
-	 * pool has not yet been initialised (e.g. unit-test contexts). */
+	 * pool has not yet been initialised (e.g. unit-test contexts).
+	 * Capture the pool we used so destroy returns it to the same allocator
+	 * even if the global pool pointer changes in between. */
+	struct obs_audio_pool *pool = obs->audio.output_buf_pool;
 	const size_t size = sizeof(float) * AUDIO_OUTPUT_FRAMES * MAX_AUDIO_CHANNELS * MAX_AUDIO_MIXES;
-	float *ptr = obs->audio.output_buf_pool
-	                     ? (float *)obs_audio_pool_alloc(obs->audio.output_buf_pool)
-	                     : (float *)bzalloc(size);
+	float *ptr = pool ? (float *)obs_audio_pool_alloc(pool)
+	                  : (float *)bzalloc(size);
 	if (!ptr)
 		return;
 
+	source->audio_output_buf_pool = pool;
 	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++) {
 		size_t mix_pos = mix * AUDIO_OUTPUT_FRAMES * MAX_AUDIO_CHANNELS;
 
@@ -193,13 +196,14 @@ static void allocate_audio_output_buffer(struct obs_source *source)
 
 static void allocate_audio_mix_buffer(struct obs_source *source)
 {
+	struct obs_audio_pool *pool = obs->audio.mix_buf_pool;
 	const size_t size = sizeof(float) * AUDIO_OUTPUT_FRAMES * MAX_AUDIO_CHANNELS;
-	float *ptr = obs->audio.mix_buf_pool
-	                     ? (float *)obs_audio_pool_alloc(obs->audio.mix_buf_pool)
-	                     : (float *)bzalloc(size);
+	float *ptr = pool ? (float *)obs_audio_pool_alloc(pool)
+	                  : (float *)bzalloc(size);
 	if (!ptr)
 		return;
 
+	source->audio_mix_buf_pool = pool;
 	for (size_t i = 0; i < MAX_AUDIO_CHANNELS; i++) {
 		source->audio_mix_buf[i] = ptr + AUDIO_OUTPUT_FRAMES * i;
 	}
@@ -819,16 +823,25 @@ static void obs_source_destroy_defer(struct obs_source *source)
 	for (i = 0; i < MAX_AUDIO_CHANNELS; i++)
 		deque_free(&source->audio_input_buf[i]);
 	audio_resampler_destroy(source->resampler);
-	/* Return audio buffers to the pool (or free via heap if pool absent). */
-	if (obs->audio.output_buf_pool)
-		obs_audio_pool_free(obs->audio.output_buf_pool, source->audio_output_buf[0][0]);
-	else
-		bfree(source->audio_output_buf[0][0]);
+	/* Return audio buffers to the same allocator that produced them.
+	 * Using the per-source captured pool pointer prevents heap corruption
+	 * when a buffer was bzalloc'd (pool was NULL at create time) but the
+	 * global pool exists at destroy time. */
+	if (source->audio_output_buf[0][0]) {
+		if (source->audio_output_buf_pool)
+			obs_audio_pool_free(source->audio_output_buf_pool,
+					    source->audio_output_buf[0][0]);
+		else
+			bfree(source->audio_output_buf[0][0]);
+	}
 
-	if (obs->audio.mix_buf_pool)
-		obs_audio_pool_free(obs->audio.mix_buf_pool, source->audio_mix_buf[0]);
-	else
-		bfree(source->audio_mix_buf[0]);
+	if (source->audio_mix_buf[0]) {
+		if (source->audio_mix_buf_pool)
+			obs_audio_pool_free(source->audio_mix_buf_pool,
+					    source->audio_mix_buf[0]);
+		else
+			bfree(source->audio_mix_buf[0]);
+	}
 
 	obs_source_frame_destroy(source->async_preload_frame);
 

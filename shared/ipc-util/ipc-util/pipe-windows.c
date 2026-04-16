@@ -20,7 +20,12 @@
 
 static inline bool ipc_pipe_internal_create_events(ipc_pipe_server_t *pipe)
 {
-	HANDLE ready_event = CreateEvent(NULL, true, false, NULL);
+	/* ready_event is auto-reset: ReadFile/ConnectNamedPipe re-arm it per
+	 * I/O so a stale signal from the previous call cannot make the next
+	 * WaitForMultipleObjects return immediately while the new I/O is
+	 * still pending. stop_event stays manual-reset so a single set
+	 * latches "shutting down" for every wakeup site. */
+	HANDLE ready_event = CreateEvent(NULL, false, false, NULL);
 	HANDLE stop_event = CreateEvent(NULL, true, false, NULL);
 	const bool success = ready_event && stop_event;
 	if (!success) {
@@ -242,6 +247,10 @@ void ipc_pipe_server_free(ipc_pipe_server_t *pipe)
 	if (pipe->stop_event) {
 		if (pipe->handle) {
 			if (pipe->thread) {
+				/* Cancel any in-flight ReadFile so the worker
+				 * unblocks from GetOverlappedResult promptly
+				 * even if the peer never sends or disconnects. */
+				CancelIoEx(pipe->handle, &pipe->overlap);
 				SetEvent(pipe->stop_event);
 				WaitForSingleObject(pipe->thread, INFINITE);
 				CloseHandle(pipe->thread);

@@ -25,6 +25,7 @@
     --bg_preview: var(--grey8);
 
     --text: var(--black1);
+    --text_light: var(--black3);
     --text_muted: var(--black4);
 
     --text_disabled: var(--text_muted);

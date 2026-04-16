@@ -43,9 +43,14 @@ static void mark_as_ticked(obs_source_t *parent, obs_source_t *child, void *para
 
 	child->ticked = child->enabled;
 
+	/* Hold filter_mutex across the read: a UI-thread filter add/remove
+	 * mutates filters.array under the same mutex, and the resulting
+	 * darray realloc would otherwise race with this read. */
+	pthread_mutex_lock(&child->filter_mutex);
 	for (size_t i = 0; i < child->filters.num; i++) {
 		child->filters.array[i]->ticked = child->filters.array[i]->enabled;
 	}
+	pthread_mutex_unlock(&child->filter_mutex);
 }
 
 static uint64_t tick_sources(uint64_t cur_time, uint64_t last_time)
@@ -112,6 +117,18 @@ static uint64_t tick_sources(uint64_t cur_time, uint64_t last_time)
 			obs_source_t *s = mix->view->channels[j];
 			if (s) {
 				s->ticked = s->enabled;
+				/* Also tick the top-level source's own filter
+				 * chain — enum_full_tree walks descendants but
+				 * this scope is the filters that live ON the
+				 * channel root itself.  Hold filter_mutex to
+				 * race-protect against UI-thread filter
+				 * add/remove on the channel root. */
+				pthread_mutex_lock(&s->filter_mutex);
+				for (size_t k = 0; k < s->filters.num; k++) {
+					obs_source_t *f = s->filters.array[k];
+					f->ticked = f->enabled;
+				}
+				pthread_mutex_unlock(&s->filter_mutex);
 				obs_source_enum_full_tree(s, mark_as_ticked, NULL);
 			}
 		}
@@ -674,8 +691,12 @@ static void set_gpu_converted_data(struct video_frame *output, const struct vide
 {
 	/* Some format cases below compute width*2 or width*4 as uint32_t.
 	 * Reject widths that would cause silent wraparound. */
-	if (info->width > UINT32_MAX / 4)
+	if (info->width > UINT32_MAX / 4) {
+		blog(LOG_ERROR,
+		     "set_gpu_converted_data: refusing frame with width %u "
+		     "(would overflow plane size arithmetic)", info->width);
 		return;
+	}
 
 	switch (info->format) {
 	case VIDEO_FORMAT_I420: {

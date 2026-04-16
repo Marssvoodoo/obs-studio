@@ -490,11 +490,6 @@ void AudioMixer::reloadVolumeControls()
 			return true;
 		}
 
-		bool audioActive = obs_source_audio_active(source);
-		if (!audioActive) {
-			return true;
-		}
-
 		auto uuidPointer = obs_source_get_uuid(source);
 		if (!uuidPointer || !*uuidPointer) {
 			return true;
@@ -680,7 +675,7 @@ void AudioMixer::updateVolumeLayouts()
 		}
 	}
 
-	std::sort(rankedVolumes.begin(), rankedVolumes.end(), [](const RankedVolume &a, const RankedVolume &b) {
+	std::stable_sort(rankedVolumes.begin(), rankedVolumes.end(), [](const RankedVolume &a, const RankedVolume &b) {
 		const QString &nameA = a.control->getCachedName();
 		const QString &nameB = b.control->getCachedName();
 

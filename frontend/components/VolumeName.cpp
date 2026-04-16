@@ -187,7 +187,11 @@ void VolumeName::updateLabelText(const QString &name)
 
 	int availableWidth = label->contentsRect().width();
 	if (availableWidth <= 0) {
-		label->clear();
+		/* Pre-layout call: setting the un-elided text keeps the label
+		 * usable until the first layout pass triggers a re-render with
+		 * a real width.  Calling clear() here would leave a blank
+		 * label visible to the user during scene/source bring-up. */
+		label->setText(name);
 		fullText = name;
 		return;
 	}

@@ -31,6 +31,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
+#include <thread>
 
 #ifdef YOUTUBE_ENABLED
 #include <docks/YouTubeAppDock.hpp>
@@ -47,20 +48,20 @@
 static void append_perf_export_sample(OBSBasic *basic, const QString &csvPath,
 				      uint64_t exportStartNs)
 {
-	QFile file(csvPath);
-	if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append))
+	/* The QTimer that drives this is parented to OBSBasic, so it is
+	 * destroyed during widget teardown.  However, audio-reset paths can
+	 * tear down obs->audio while OBSBasic is still alive — a tick
+	 * landing in that window would dereference zeroed pool pointers via
+	 * obs_get_audio_render_thread_count() & co.  Bail out early if the
+	 * core is not currently usable. */
+	if (!obs_initialized() || !obs_get_video())
 		return;
 
-	QTextStream out(&file);
-	if (file.size() == 0) {
-		out << "TimestampUtc,ElapsedSec,OBS_CPU_Pct,ActiveFPS,AvgFrameTime_ms,"
-		       "TotalFrames,LaggedFrames,SkippedFrames,StreamTotalFrames,"
-		       "StreamDroppedFrames,RecordTotalFrames,RecordDroppedFrames,"
-		       "AudioCallbackLast_ms,AudioCallbackAvg_ms,AudioCallbackPeak_ms,"
-		       "AudioRenderThreads,AudioGraphRebuilds,AudioParallelTicks,"
-		       "AudioSerialTicks,AudioPeakParallelJobs\n";
-	}
-
+	/* Snapshot all libobs state on the GUI thread (fast, ms-scale), then
+	 * dispatch the file open + write + close to the global thread pool so
+	 * a slow disk doesn't hitch the UI.  At sub-second intervals on a
+	 * networked CSV target, the synchronous write was reported to skew
+	 * the very FPS metric it was measuring. */
 	OBSOutputAutoRelease strOutput = obs_frontend_get_streaming_output();
 	OBSOutputAutoRelease recOutput = obs_frontend_get_recording_output();
 	video_t *video = obs_get_video();
@@ -77,26 +78,47 @@ static void append_perf_export_sample(OBSBasic *basic, const QString &csvPath,
 	const double audioPeakMs =
 		(double)obs_get_peak_audio_callback_time_ns() / 1000000.0;
 
-	out << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs) << ','
-	    << QString::number(elapsedSec, 'f', 3) << ','
-	    << QString::number(cpuPct, 'f', 2) << ','
-	    << QString::number(activeFps, 'f', 2) << ','
-	    << QString::number(avgFrameMs, 'f', 3) << ','
-	    << video_output_get_total_frames(video) << ','
-	    << obs_get_lagged_frames() << ','
-	    << video_output_get_skipped_frames(video) << ','
-	    << (strOutput ? obs_output_get_total_frames(strOutput) : 0) << ','
-	    << (strOutput ? obs_output_get_frames_dropped(strOutput) : 0) << ','
-	    << (recOutput ? obs_output_get_total_frames(recOutput) : 0) << ','
-	    << (recOutput ? obs_output_get_frames_dropped(recOutput) : 0) << ','
-	    << QString::number(audioLastMs, 'f', 3) << ','
-	    << QString::number(audioAvgMs, 'f', 3) << ','
-	    << QString::number(audioPeakMs, 'f', 3) << ','
-	    << obs_get_audio_render_thread_count() << ','
-	    << obs_get_audio_graph_rebuilds() << ','
-	    << obs_get_audio_parallel_ticks() << ','
-	    << obs_get_audio_serial_ticks() << ','
-	    << obs_get_audio_peak_parallel_jobs() << '\n';
+	QString line;
+	{
+		QTextStream out(&line);
+		out << QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs) << ','
+		    << QString::number(elapsedSec, 'f', 3) << ','
+		    << QString::number(cpuPct, 'f', 2) << ','
+		    << QString::number(activeFps, 'f', 2) << ','
+		    << QString::number(avgFrameMs, 'f', 3) << ','
+		    << video_output_get_total_frames(video) << ','
+		    << obs_get_lagged_frames() << ','
+		    << video_output_get_skipped_frames(video) << ','
+		    << (strOutput ? obs_output_get_total_frames(strOutput) : 0) << ','
+		    << (strOutput ? obs_output_get_frames_dropped(strOutput) : 0) << ','
+		    << (recOutput ? obs_output_get_total_frames(recOutput) : 0) << ','
+		    << (recOutput ? obs_output_get_frames_dropped(recOutput) : 0) << ','
+		    << QString::number(audioLastMs, 'f', 3) << ','
+		    << QString::number(audioAvgMs, 'f', 3) << ','
+		    << QString::number(audioPeakMs, 'f', 3) << ','
+		    << obs_get_audio_render_thread_count() << ','
+		    << obs_get_audio_graph_rebuilds() << ','
+		    << obs_get_audio_parallel_ticks() << ','
+		    << obs_get_audio_serial_ticks() << ','
+		    << obs_get_audio_peak_parallel_jobs() << '\n';
+	}
+
+	std::thread([csvPath, line]() {
+		QFile file(csvPath);
+		if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append))
+			return;
+		const bool needsHeader = (file.size() == 0);
+		QTextStream out(&file);
+		if (needsHeader) {
+			out << "TimestampUtc,ElapsedSec,OBS_CPU_Pct,ActiveFPS,AvgFrameTime_ms,"
+			       "TotalFrames,LaggedFrames,SkippedFrames,StreamTotalFrames,"
+			       "StreamDroppedFrames,RecordTotalFrames,RecordDroppedFrames,"
+			       "AudioCallbackLast_ms,AudioCallbackAvg_ms,AudioCallbackPeak_ms,"
+			       "AudioRenderThreads,AudioGraphRebuilds,AudioParallelTicks,"
+			       "AudioSerialTicks,AudioPeakParallelJobs\n";
+		}
+		out << line;
+	}).detach();
 }
 #include <settings/OBSBasicSettings.hpp>
 #include <utility/QuickTransition.hpp>

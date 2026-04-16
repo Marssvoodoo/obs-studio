@@ -124,7 +124,6 @@ target_sources(
     util/serializer.h
     util/source-profiler.c
     util/source-profiler.h
-    util/spsc-queue.h
     util/sse-intrin.h
     util/task.c
     util/task.h
@@ -234,14 +233,25 @@ elseif(
 endif()
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64|i[3-6]86|x86)$")
+  include(CheckCCompilerFlag)
   if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
-    set_source_files_properties(obs-audio-optimized-avx2.c PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+    check_c_compiler_flag("/arch:AVX2" OBS_C_HAS_ARCH_AVX2)
+    if(OBS_C_HAS_ARCH_AVX2)
+      set_source_files_properties(obs-audio-optimized-avx2.c PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+    else()
+      message(WARNING "MSVC does not accept /arch:AVX2 — AVX2 audio path will compile without explicit ISA flag")
+    endif()
   elseif(
     CMAKE_C_COMPILER_ID STREQUAL "GNU"
     OR CMAKE_C_COMPILER_ID STREQUAL "Clang"
     OR CMAKE_C_COMPILER_ID STREQUAL "AppleClang"
   )
-    set_source_files_properties(obs-audio-optimized-avx2.c PROPERTIES COMPILE_OPTIONS "-mavx2")
+    check_c_compiler_flag("-mavx2" OBS_C_HAS_MAVX2)
+    if(OBS_C_HAS_MAVX2)
+      set_source_files_properties(obs-audio-optimized-avx2.c PROPERTIES COMPILE_OPTIONS "-mavx2")
+    else()
+      message(WARNING "Compiler does not accept -mavx2 — AVX2 audio path will compile without explicit ISA flag")
+    endif()
   endif()
 endif()
 
@@ -362,7 +372,6 @@ set(
   util/profiler.h
   util/profiler.hpp
   util/serializer.h
-  util/spsc-queue.h
   util/sse-intrin.h
   util/task.h
   util/text-lookup.h

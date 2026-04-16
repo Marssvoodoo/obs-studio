@@ -501,6 +501,13 @@ static inline void release_audio_graph(struct obs_core_audio *audio)
 static void rebuild_audio_graph(struct obs_core_audio *audio,
 				struct obs_core_data *data)
 {
+	/* Clear graph_dirty BEFORE traversing.  This way any concurrent
+	 * mark_audio_graph_dirty fired during the rebuild (e.g. a UI-thread
+	 * source_filter_add) sets it back to 1 and survives — the NEXT tick
+	 * will rebuild again.  The previous "set 0 at the end" pattern would
+	 * unconditionally clobber that interleaving signal. */
+	os_atomic_set_long(&audio->graph_dirty, 0);
+
 	release_audio_graph(audio);
 
 	pthread_mutex_lock(&obs->video.mixes_mutex);
@@ -540,7 +547,6 @@ static void rebuild_audio_graph(struct obs_core_audio *audio,
 	}
 	pthread_mutex_unlock(&data->audio_sources_mutex);
 
-	os_atomic_set_long(&audio->graph_dirty, 0);
 	os_atomic_inc_long(&audio->graph_rebuilds);
 }
 
@@ -719,7 +725,20 @@ static inline bool can_parallel_render_source(const obs_source_t *source)
  * "simple" sources are parallelised — those without audio_render/audio_mix
  * callbacks and without COMPOSITE or SUBMIX flags (see
  * can_parallel_render_source()).  Such sources operate exclusively on their
- * own private buffers, so no cross-source synchronisation is required. */
+ * own private buffers, so no cross-source synchronisation is required.
+ *
+ * AUDIO FILTER CONTRACT (new in this branch): each source's audio filter
+ * chain is invoked from the worker thread that processes that source.
+ * Two different sources may execute their filter chains concurrently on
+ * different workers.  Audio filters MUST therefore be thread-safe with
+ * respect to any state shared across filter instances of the same type
+ * (typically a static/global cache).  Per-instance state is not at risk
+ * because no source is dispatched to more than one worker per tick.
+ *
+ * If a third-party audio filter relies on single-threaded execution of
+ * its callback across all instances, it must be either (a) updated to
+ * guard its shared state, or (b) excluded from parallelisation by adding
+ * a flag to can_parallel_render_source(). */
 static void do_audio_render_job(void *param)
 {
 	struct audio_render_job *j = (struct audio_render_job *)param;
@@ -773,8 +792,12 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 
 	/* Lazy-init the render pool on first call with 3+ sources.
 	 * audio_callback is always called from the single OBS audio thread,
-	 * so this check is inherently thread-safe.                          */
-	if (!audio->render_pool && n_sources >= 3) {
+	 * so this check is inherently thread-safe.  Sticky-flag the attempt
+	 * so a single-core system or transient pthread_create failure is not
+	 * retried 60×/sec for the lifetime of the process. */
+	if (!audio->render_pool && !audio->render_pool_create_attempted &&
+	    n_sources >= 3) {
+		audio->render_pool_create_attempted = true;
 		audio->render_pool = obs_audio_threadpool_create(0, 0);
 		if (audio->render_pool)
 			blog(LOG_INFO,
@@ -782,6 +805,10 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 			     "%zu worker(s)",
 			     obs_audio_threadpool_num_threads(
 				     audio->render_pool));
+		else
+			blog(LOG_INFO,
+			     "obs-audio-threaded: render pool unavailable — "
+			     "falling back to serial render");
 	}
 
 	bool use_parallel = (audio->render_pool != NULL && n_sources >= 3 &&
