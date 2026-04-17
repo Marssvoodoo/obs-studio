@@ -198,32 +198,32 @@ void copy_video_plane_optimized(uint8_t *dst, const uint8_t *src,
 	if (!height || !width)
 		return;
 
-	/* Reject overlapping src/dst regions — memcpy is undefined for overlap
-	 * and SIMD streaming stores would corrupt data.
-	 *
-	 * Two byte ranges [a, a+len_a) and [b, b+len_b) overlap iff
-	 * a < b+len_b AND b < a+len_a. The negated form below is the
-	 * non-overlapping condition; we return when ranges DO overlap. */
-	{
-		const uint8_t *src_end = src + (size_t)(height - 1) * src_stride + width;
-		const uint8_t *dst_end = dst + (size_t)(height - 1) * dst_stride + width;
-		if (!(dst >= src_end || src >= dst_end)) {
-			blog(LOG_WARNING,
-			     "copy_video_plane_optimized: src/dst byte ranges "
-			     "overlap (dst=%p src=%p w=%u h=%u dst_stride=%u "
-			     "src_stride=%u) — copy skipped",
-			     (const void *)dst, (const void *)src,
-			     width, height, dst_stride, src_stride);
-			return;
-		}
-	}
-
 	if (width > src_stride || width > dst_stride) {
 		blog(LOG_WARNING,
 		     "copy_video_plane_optimized: width %u exceeds stride "
 		     "(src_stride=%u dst_stride=%u) — copy skipped",
 		     width, src_stride, dst_stride);
 		return;
+	}
+
+	/* Detect overlap and fall back to memmove (line-by-line). The SIMD
+	 * paths below assume non-overlapping buffers; comparing pointers across
+	 * unrelated allocations is technically UB but in practice safe on the
+	 * flat address spaces this code targets. We check the full-extent byte
+	 * ranges so legitimate back-to-back single-line buffers don't trip the
+	 * fallback. */
+	{
+		const uint8_t *src_end = src + (size_t)(height - 1) * src_stride + width;
+		const uint8_t *dst_end = dst + (size_t)(height - 1) * dst_stride + width;
+		const bool overlap = !(dst >= src_end || src >= dst_end);
+		if (overlap) {
+			for (uint32_t y = 0; y < height; y++) {
+				const uint8_t *src_line = src + (size_t)y * src_stride;
+				uint8_t *dst_line = dst + (size_t)y * dst_stride;
+				memmove(dst_line, src_line, width);
+			}
+			return;
+		}
 	}
 	if ((size_t)src_stride > SIZE_MAX / height ||
 	    (size_t)dst_stride > SIZE_MAX / height) {

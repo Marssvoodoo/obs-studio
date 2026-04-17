@@ -19,8 +19,15 @@
 
 static bool upload_texture_2d(struct gs_texture_2d *tex, const uint8_t **data)
 {
-	uint32_t row_size = tex->width * gs_get_format_bpp(tex->base.format);
-	uint32_t tex_size = (uint32_t)((uint64_t)tex->height * row_size / 8);
+	uint64_t row_size64 = (uint64_t)tex->width * gs_get_format_bpp(tex->base.format);
+	uint64_t tex_size64 = (uint64_t)tex->height * row_size64 / 8;
+	if (row_size64 > UINT32_MAX || tex_size64 > UINT32_MAX) {
+		blog(LOG_ERROR,
+		     "upload_texture_2d: texture size overflow (w=%u h=%u bpp=%u)",
+		     tex->width, tex->height, gs_get_format_bpp(tex->base.format));
+		return false;
+	}
+	uint32_t tex_size = (uint32_t)tex_size64;
 	uint32_t num_levels = tex->base.levels;
 	bool compressed = gs_is_compressed_format(tex->base.format);
 	bool success;

@@ -132,11 +132,19 @@ void obs_audio_pool_destroy(struct obs_audio_pool *pool)
 	pthread_mutex_lock(&pool->lock);
 
 	if (pool->outstanding != 0) {
-		blog(LOG_WARNING,
+		/* Intentionally leak the pool struct, lock, and arenas. Freeing
+		 * them while blocks are still live would turn the next deferred
+		 * obs_audio_pool_free into a heap-corrupting wild write
+		 * (`*(void**)ptr = pool->free_list` on a dead pool). A deferred
+		 * source destroy from a script hook or module unload that
+		 * arrives after obs_free_audio is the realistic trigger. */
+		blog(LOG_ERROR,
 		     "obs_audio_pool_destroy: %zu of %zu blocks still "
-		     "outstanding (block_size=%zu) — possible leak or "
-		     "use-after-free",
+		     "outstanding (block_size=%zu) — leaking pool to avoid UAF. "
+		     "This indicates a source/audio-buffer lifetime bug.",
 		     pool->outstanding, pool->total_blocks, pool->block_size);
+		pthread_mutex_unlock(&pool->lock);
+		return;
 	}
 
 	struct pool_arena *arena = pool->arenas;

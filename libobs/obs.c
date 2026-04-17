@@ -1005,6 +1005,8 @@ static void obs_free_audio(void)
 	struct obs_audio_pool *output_buf_pool = audio->output_buf_pool;
 	struct obs_audio_pool *mix_buf_pool = audio->mix_buf_pool;
 	struct obs_audio_threadpool *render_pool = audio->render_pool;
+	void *render_jobs_save = audio->render_jobs;
+	void *render_job_batch_save = audio->render_job_batch;
 	bool graph_hooks_connected = audio->graph_hooks_connected;
 	const bool destroying_core_data = !obs->data.valid;
 
@@ -1063,8 +1065,18 @@ static void obs_free_audio(void)
 		obs_source_release(audio->render_order.array[i]);
 	da_free(audio->render_order);
 	da_free(audio->root_nodes);
-	bfree(audio->render_job_batch);
-	bfree(audio->render_jobs);
+
+	/* Only free the render-job batch buffers when we are fully tearing the
+	 * core down. On a non-destroying audio reset the threadpool is
+	 * preserved, and a worker still draining the prior batch could read
+	 * pool->jobs[idx] from these buffers. The batch buffers will be
+	 * lazily re-grown on the next obs_audio_threadpool_run anyway. */
+	if (destroying_core_data) {
+		bfree(audio->render_job_batch);
+		bfree(audio->render_jobs);
+		audio->render_job_batch = NULL;
+		audio->render_jobs = NULL;
+	}
 
 	da_free(audio->monitors);
 	bfree(audio->monitoring_device_name);
@@ -1091,8 +1103,13 @@ static void obs_free_audio(void)
 		audio->output_buf_pool = output_buf_pool;
 		audio->mix_buf_pool = mix_buf_pool;
 		audio->render_pool = render_pool;
+		audio->render_jobs = render_jobs_save;
+		audio->render_job_batch = render_job_batch_save;
 		audio->graph_hooks_connected = false;
 		audio->graph_dirty = 1;
+	} else {
+		(void)render_jobs_save;
+		(void)render_job_batch_save;
 	}
 }
 

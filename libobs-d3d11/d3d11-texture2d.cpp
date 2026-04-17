@@ -75,7 +75,15 @@ void gs_texture_2d::BackupTexture(const uint8_t *const *data)
 			if (!data[i])
 				break;
 
-			uint32_t texSize = (uint32_t)((uint64_t)bbp * w * h / 8);
+			uint64_t texSize64 = (uint64_t)bbp * w * h / 8;
+			if (texSize64 > SIZE_MAX) {
+				blog(LOG_ERROR,
+				     "BackupTexture: level %u size %llu bytes exceeds SIZE_MAX (bbp=%u w=%u h=%u)",
+				     i, (unsigned long long)texSize64, bbp, w, h);
+				this->data.clear();
+				return;
+			}
+			size_t texSize = (size_t)texSize64;
 
 			std::vector<uint8_t> &subData = this->data[i];
 			subData.resize(texSize);

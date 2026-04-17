@@ -660,7 +660,14 @@ static inline void execute_audio_tasks(void)
  */
 static inline bool should_silence_monitored_source(obs_source_t *source, struct obs_core_audio *audio)
 {
-	obs_source_t *dup_src = audio->monitoring_duplicating_source;
+	/* Snapshot the pointer once. set_monitoring_duplication_source() runs
+	 * on the obs task queue and may swap+release the source between worker
+	 * iterations. Reading via a volatile cast prevents the compiler from
+	 * re-loading the field across the function and ensures a single load
+	 * (atomic at the hardware level for aligned pointer-width reads on the
+	 * platforms we target). All subsequent derefs go through the local. */
+	obs_source_t *dup_src =
+		*(obs_source_t *volatile *)&audio->monitoring_duplicating_source;
 
 	if (!dup_src || !obs_source_active(dup_src))
 		return false;
@@ -668,12 +675,12 @@ static inline bool should_silence_monitored_source(obs_source_t *source, struct 
 	if (dup_src->monitoring_type == OBS_MONITORING_TYPE_MONITOR_ONLY)
 		return false;
 
-	bool fader_muted = close_float(audio->monitoring_duplicating_source->volume, 0.0f, 0.0001f);
-	bool output_capture_unmuted = !audio->monitoring_duplicating_source->muted && !fader_muted;
+	bool fader_muted = close_float(dup_src->volume, 0.0f, 0.0001f);
+	bool output_capture_unmuted = !dup_src->muted && !fader_muted;
 
 	if (output_capture_unmuted) {
 		if (source->monitoring_type == OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT &&
-		    source != audio->monitoring_duplicating_source) {
+		    source != dup_src) {
 			return true;
 		}
 	}
@@ -682,10 +689,12 @@ static inline bool should_silence_monitored_source(obs_source_t *source, struct 
 
 static inline void clear_audio_output_buf(obs_source_t *source, struct obs_core_audio *audio)
 {
-	if (!audio->monitoring_duplicating_source)
+	obs_source_t *dup_src =
+		*(obs_source_t *volatile *)&audio->monitoring_duplicating_source;
+	if (!dup_src)
 		return;
 
-	uint32_t aoc_mixers = audio->monitoring_duplicating_source->audio_mixers;
+	uint32_t aoc_mixers = dup_src->audio_mixers;
 	uint32_t source_mixers = source->audio_mixers;
 
 	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++) {
@@ -713,6 +722,23 @@ static inline bool can_parallel_render_source(const obs_source_t *source)
 		return false;
 
 	if (source->info.output_flags & OBS_SOURCE_SUBMIX)
+		return false;
+
+	/* Sources with attached filters fall back to coordinator-thread
+	 * processing. The legacy OBS audio-filter ABI guarantees serial
+	 * filter_audio execution across all instances of a plugin type, and
+	 * many shipped third-party filters (RNNoise NoiseSuppress, VST hosts,
+	 * compressors) hold un-locked static caches that depend on it. Until
+	 * an opt-in OBS_SOURCE_AUDIO_PARALLEL_SAFE flag is added to the
+	 * source-info ABI, dispatching their filter chains across worker
+	 * threads is a silent thread-safety break we are not willing to ship.
+	 *
+	 * Reading source->filters.num without the filter_mutex is safe here:
+	 * filter add/remove only happens on the graphics thread (or under
+	 * obs_source_filter_add/remove which serialises with the audio thread
+	 * via obs_audio_pending_lock), and we only need an approximate "any
+	 * filters?" answer for partitioning purposes. */
+	if (source->filters.num > 0)
 		return false;
 
 	return true;

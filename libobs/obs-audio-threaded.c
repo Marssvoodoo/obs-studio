@@ -45,12 +45,23 @@ struct obs_audio_threadpool {
 
 static bool claim_job(struct obs_audio_threadpool *pool, struct audio_job *job)
 {
-	if (!pool->jobs)
+	/* Snapshot pool->jobs once via volatile read into a local. The
+	 * coordinator clears pool->jobs to NULL after drain in
+	 * obs_audio_threadpool_run; without a local snapshot a worker that
+	 * passed the entry-check could observe NULL on the post-CAS
+	 * dereference (`pool->jobs[idx]`) on weakly-ordered platforms (ARM64)
+	 * and SEGV. We also re-read num_jobs each iteration in case of a
+	 * rebatch, but the jobs[] backing array stays stable for the duration
+	 * of one batch_serial. */
+	struct audio_job *jobs =
+		*(struct audio_job *volatile *)&pool->jobs;
+	if (!jobs)
 		return false;
 
 	while (true) {
+		long num = os_atomic_load_long(&pool->num_jobs);
 		long idx = os_atomic_load_long(&pool->next_job);
-		if (idx >= os_atomic_load_long(&pool->num_jobs))
+		if (idx >= num)
 			return false;
 
 		if (!os_atomic_compare_swap_long(&pool->next_job, idx, idx + 1)) {
@@ -61,7 +72,7 @@ static bool claim_job(struct obs_audio_threadpool *pool, struct audio_job *job)
 			continue;
 		}
 
-		*job = pool->jobs[idx];
+		*job = jobs[idx];
 		return true;
 	}
 }

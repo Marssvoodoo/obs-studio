@@ -32,6 +32,9 @@
 #include <QFileInfo>
 #include <QTextStream>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <deque>
 
 #ifdef YOUTUBE_ENABLED
 #include <docks/YouTubeAppDock.hpp>
@@ -44,6 +47,92 @@
 #include <dialogs/OBSBasicProperties.hpp>
 #include <dialogs/OBSBasicTransform.hpp>
 #include <models/SceneCollection.hpp>
+
+/* Single dedicated writer thread + bounded queue. The previous design
+ * spawned a fresh detached std::thread per timer tick, which (a) could
+ * accumulate threads on a slow/networked sink with no backpressure,
+ * (b) could interleave concurrent writes through QFile (not atomic for
+ * concurrent appenders), (c) could outlive QApplication::exit, and
+ * (d) cost ~100-500us per spawn — comparable to the perf overhead being
+ * measured. */
+namespace {
+struct PerfExportWriter {
+	std::mutex mtx;
+	std::condition_variable cv;
+	std::deque<QString> queue;     /* CSV lines pending write */
+	QString path;                   /* current sink path (set at start) */
+	bool wroteHeader = false;
+	bool stop = false;
+	std::thread thread;
+	static constexpr size_t kMaxQueue = 64;
+	size_t dropped = 0;
+
+	void run()
+	{
+		for (;;) {
+			QString line;
+			{
+				std::unique_lock<std::mutex> lock(mtx);
+				cv.wait(lock, [this]{ return stop || !queue.empty(); });
+				if (stop && queue.empty())
+					return;
+				line = std::move(queue.front());
+				queue.pop_front();
+			}
+			QFile file(path);
+			if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append))
+				continue;
+			const bool needHeader = (file.size() == 0) && !wroteHeader;
+			QTextStream out(&file);
+			if (needHeader) {
+				out << "TimestampUtc,ElapsedSec,OBS_CPU_Pct,ActiveFPS,AvgFrameTime_ms,"
+				       "TotalFrames,LaggedFrames,SkippedFrames,StreamTotalFrames,"
+				       "StreamDroppedFrames,RecordTotalFrames,RecordDroppedFrames,"
+				       "AudioCallbackLast_ms,AudioCallbackAvg_ms,AudioCallbackPeak_ms,"
+				       "AudioRenderThreads,AudioGraphRebuilds,AudioParallelTicks,"
+				       "AudioSerialTicks,AudioPeakParallelJobs\n";
+				wroteHeader = true;
+			}
+			out << line;
+		}
+	}
+
+	void start(const QString &csvPath)
+	{
+		std::lock_guard<std::mutex> lock(mtx);
+		if (thread.joinable())
+			return;
+		path = csvPath;
+		stop = false;
+		wroteHeader = false;
+		dropped = 0;
+		thread = std::thread([this]{ run(); });
+	}
+
+	void shutdown()
+	{
+		{
+			std::lock_guard<std::mutex> lock(mtx);
+			stop = true;
+			cv.notify_all();
+		}
+		if (thread.joinable())
+			thread.join();
+	}
+
+	void enqueue(const QString &line)
+	{
+		std::lock_guard<std::mutex> lock(mtx);
+		if (queue.size() >= kMaxQueue) {
+			dropped++;
+			return; /* drop sample under backpressure */
+		}
+		queue.push_back(line);
+		cv.notify_one();
+	}
+};
+static PerfExportWriter g_perfExportWriter;
+}
 
 static void append_perf_export_sample(OBSBasic *basic, const QString &csvPath,
 				      uint64_t exportStartNs)
@@ -103,22 +192,13 @@ static void append_perf_export_sample(OBSBasic *basic, const QString &csvPath,
 		    << obs_get_audio_peak_parallel_jobs() << '\n';
 	}
 
-	std::thread([csvPath, line]() {
-		QFile file(csvPath);
-		if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append))
-			return;
-		const bool needsHeader = (file.size() == 0);
-		QTextStream out(&file);
-		if (needsHeader) {
-			out << "TimestampUtc,ElapsedSec,OBS_CPU_Pct,ActiveFPS,AvgFrameTime_ms,"
-			       "TotalFrames,LaggedFrames,SkippedFrames,StreamTotalFrames,"
-			       "StreamDroppedFrames,RecordTotalFrames,RecordDroppedFrames,"
-			       "AudioCallbackLast_ms,AudioCallbackAvg_ms,AudioCallbackPeak_ms,"
-			       "AudioRenderThreads,AudioGraphRebuilds,AudioParallelTicks,"
-			       "AudioSerialTicks,AudioPeakParallelJobs\n";
-		}
-		out << line;
-	}).detach();
+	g_perfExportWriter.start(csvPath);
+	g_perfExportWriter.enqueue(line);
+}
+
+void obs_basic_perf_export_shutdown()
+{
+	g_perfExportWriter.shutdown();
 }
 #include <settings/OBSBasicSettings.hpp>
 #include <utility/QuickTransition.hpp>
