@@ -49,6 +49,12 @@ static inline size_t align64(size_t sz)
  * pool's free list.  Returns false on allocation failure. */
 /* Maximum blocks per arena — prevents unbounded geometric growth. */
 #define MAX_ARENA_BLOCKS 65536u
+/* Total bytes per single arena allocation — clamps the geometric growth
+ * for large block sizes (e.g. 192 KB output buffers × 65536 = 12 GB
+ * single-arena alloc which fails on 32-bit and is unreasonable even on
+ * 64-bit). 256 MB is generous for audio workloads and stays well below
+ * 32-bit address-space limits. */
+#define MAX_ARENA_BYTES (256u * 1024u * 1024u)
 
 static bool pool_grow(struct obs_audio_pool *pool, size_t n_blocks)
 {
@@ -56,6 +62,17 @@ static bool pool_grow(struct obs_audio_pool *pool, size_t n_blocks)
 
 	if (n_blocks > MAX_ARENA_BLOCKS)
 		n_blocks = MAX_ARENA_BLOCKS;
+
+	/* Cap by total bytes too: large block_sz × MAX_ARENA_BLOCKS would
+	 * request multi-GB allocations that fail on 32-bit and waste address
+	 * space on 64-bit. Always allocate at least 1 block. */
+	if (block_sz > 0) {
+		const size_t bytes_cap = MAX_ARENA_BYTES / block_sz;
+		if (bytes_cap == 0)
+			n_blocks = 1; /* block bigger than cap — accept single */
+		else if (n_blocks > bytes_cap)
+			n_blocks = bytes_cap;
+	}
 
 	/* Guard against size_t overflow in the multiplication. */
 	if (block_sz > 0 && n_blocks > (SIZE_MAX - sizeof(struct pool_arena) -
@@ -180,6 +197,13 @@ void *obs_audio_pool_alloc(struct obs_audio_pool *pool)
 	pool->free_list  = *(void **)block;
 	const size_t bsz = pool->block_size;
 	pool->outstanding++;
+
+	/* Clear the embedded free-list pointer (first sizeof(void*) bytes)
+	 * BEFORE releasing the lock. The full memset happens outside the
+	 * lock to keep critical-section length minimal, but until that runs
+	 * any concurrent read of the block would see a stale heap pointer
+	 * — an info-leak risk if a consumer ever logs raw audio bytes. */
+	*(void **)block = NULL;
 
 	pthread_mutex_unlock(&pool->lock);
 

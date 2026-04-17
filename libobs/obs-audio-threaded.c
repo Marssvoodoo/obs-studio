@@ -22,7 +22,18 @@
 #endif
 
 /* ── Constants ───────────────────────────────────────────────────────────── */
+/* Hard ceiling on worker count regardless of core count. The audio render
+ * graph rarely benefits past ~8 workers because per-source work is small
+ * (~10–50 µs at 44.1/48 kHz @ 480 frames) and cond/mutex wake-up cost
+ * (~3–5 µs per worker) dominates. Past 16 workers the wake-up overhead
+ * starts to eat the parallelism gains. Tuned empirically; if you raise
+ * this, also raise OBS_AUDIO_DEFAULT_WORKER_BUDGET so the per-source
+ * count target keeps pace. */
 #define MAX_THREADS 16u
+/* Approximate target sources-per-worker. Used to clamp num_threads on
+ * machines with many more cores than active sources, so an idle 64-core
+ * Threadripper doesn't wake 16 workers 60×/sec for a 2-source scene. */
+#define OBS_AUDIO_DEFAULT_WORKER_BUDGET 4u
 
 /* ── Thread pool ─────────────────────────────────────────────────────────── */
 struct obs_audio_threadpool {

@@ -21,7 +21,8 @@
 #include "util/util_uint64.h"
 
 /* Forward declarations from obs-audio-optimized.c */
-extern void mix_audio_optimized(struct audio_output_data *mixes, size_t channels,
+extern void mix_audio_optimized(struct audio_output_data *mixes, uint32_t mixers,
+                                size_t channels,
                                 float *(*audio_buffers)[MAX_AUDIO_CHANNELS],
                                 size_t start_point, size_t total_floats);
 extern void zero_audio_buffer_optimized(float *buffer, size_t count);
@@ -111,8 +112,11 @@ static inline void mix_audio(struct audio_output_data *mixes, obs_source_t *sour
 		total_floats -= start_point;
 	}
 
-	/* Use SIMD-optimized mixing (SSE2/AVX2) instead of scalar loop */
-	mix_audio_optimized(mixes, channels, source->audio_output_buf, start_point, total_floats);
+	/* Use SIMD-optimized mixing (SSE2/AVX2) instead of scalar loop. The
+	 * source's audio_mixers mask filters out mix slots the source isn't
+	 * routed to so we don't pay the function-call/copy overhead per
+	 * unused slot. */
+	mix_audio_optimized(mixes, source->audio_mixers, channels, source->audio_output_buf, start_point, total_floats);
 }
 
 static bool ignore_audio(obs_source_t *source, size_t channels, size_t sample_rate, uint64_t start_ts)
@@ -606,28 +610,55 @@ static bool ensure_render_jobs_capacity(struct obs_core_audio *audio, size_t cou
 	return true;
 }
 
+/* Window for the EMA so a single outlier doesn't dominate, and so the
+ * "average" reflects recent behaviour rather than dilution across the
+ * whole session. 256 callbacks at 100 Hz audio = ~2.5s of history,
+ * which is short enough to expose live regressions without flapping. */
+#define OBS_AUDIO_STATS_EMA_WINDOW 256
+
 static void record_audio_callback_stats(struct obs_core_audio *audio,
 					uint64_t callback_start_ns,
 					size_t parallel_jobs)
 {
-	long elapsed_ns = (long)(os_gettime_ns() - callback_start_ns);
+	/* Time deltas can exceed 2.1s on a debug build with breakpoints, so
+	 * keep the elapsed value in 64-bit. We still publish via the long
+	 * counters for backwards-compat with existing accessors but clamp
+	 * to LONG_MAX before storing. */
+	uint64_t elapsed_64 = os_gettime_ns() - callback_start_ns;
+	long elapsed_ns = (elapsed_64 > (uint64_t)LONG_MAX) ? LONG_MAX
+							    : (long)elapsed_64;
+
+	/* Sample counter saturates at LONG_MAX worth of callbacks (~1.4
+	 * years at 100 Hz). On saturation we wrap back to 1 so the EMA
+	 * keeps responding to new samples instead of freezing. */
 	long raw_samples = os_atomic_load_long(&audio->callback_samples);
-	long samples = (raw_samples < LONG_MAX) ? raw_samples + 1 : raw_samples;
+	long samples = (raw_samples < LONG_MAX) ? raw_samples + 1 : 1;
+
 	long avg_ns = os_atomic_load_long(&audio->callback_avg_ns);
 	long max_ns = os_atomic_load_long(&audio->callback_max_ns);
 	long peak_jobs = os_atomic_load_long(&audio->peak_parallel_jobs);
 
-	os_atomic_set_long(&audio->callback_last_ns, elapsed_ns);
-	os_atomic_set_long(&audio->callback_samples, samples);
-	if (samples == 1)
+	/* Bounded EMA: divisor caps at OBS_AUDIO_STATS_EMA_WINDOW so a new
+	 * outlier always contributes a meaningful share. The previous
+	 * implementation divided by an unbounded `samples`, so on long
+	 * sessions any new spike contributed ~0 and the average masked
+	 * real regressions. */
+	if (samples == 1) {
 		avg_ns = elapsed_ns;
-	else
-		avg_ns += (elapsed_ns - avg_ns) / samples;
-	os_atomic_set_long(&audio->callback_avg_ns, avg_ns);
+	} else {
+		long divisor = (samples < OBS_AUDIO_STATS_EMA_WINDOW)
+				   ? samples
+				   : OBS_AUDIO_STATS_EMA_WINDOW;
+		avg_ns += (elapsed_ns - avg_ns) / divisor;
+	}
 
+	/* Publish in a defined order: counters that READERS use to gate
+	 * other reads (samples) go LAST so a reader observing "new samples"
+	 * is guaranteed to see the rest of the snapshot. */
+	os_atomic_set_long(&audio->callback_last_ns, elapsed_ns);
+	os_atomic_set_long(&audio->callback_avg_ns, avg_ns);
 	if (elapsed_ns > max_ns)
 		os_atomic_set_long(&audio->callback_max_ns, elapsed_ns);
-
 	if (parallel_jobs > 0) {
 		os_atomic_inc_long(&audio->parallel_ticks);
 		if ((long)parallel_jobs > peak_jobs)
@@ -636,6 +667,10 @@ static void record_audio_callback_stats(struct obs_core_audio *audio,
 	} else {
 		os_atomic_inc_long(&audio->serial_ticks);
 	}
+	/* Sample counter LAST so the EMA-window math above sees the prior
+	 * value on the next call, and so readers gating on samples see a
+	 * complete snapshot. */
+	os_atomic_set_long(&audio->callback_samples, samples);
 }
 
 static inline void execute_audio_tasks(void)
@@ -818,23 +853,44 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 
 	/* Lazy-init the render pool on first call with 3+ sources.
 	 * audio_callback is always called from the single OBS audio thread,
-	 * so this check is inherently thread-safe.  Sticky-flag the attempt
-	 * so a single-core system or transient pthread_create failure is not
-	 * retried 60×/sec for the lifetime of the process. */
-	if (!audio->render_pool && !audio->render_pool_create_attempted &&
-	    n_sources >= 3) {
-		audio->render_pool_create_attempted = true;
-		audio->render_pool = obs_audio_threadpool_create(0, 0);
-		if (audio->render_pool)
-			blog(LOG_INFO,
-			     "obs-audio-threaded: render pool started — "
-			     "%zu worker(s)",
-			     obs_audio_threadpool_num_threads(
-				     audio->render_pool));
-		else
-			blog(LOG_INFO,
-			     "obs-audio-threaded: render pool unavailable — "
-			     "falling back to serial render");
+	 * so this check is inherently thread-safe. After a creation failure
+	 * we back off exponentially (start at ~10s, double up to ~5min)
+	 * instead of giving up forever — transient causes (RLIMIT_NPROC,
+	 * cgroup limits, brief OOM) often clear, and the previous
+	 * sticky-forever flag could be defeated by a non-destroying audio
+	 * reset clearing render_pool_create_attempted via memset anyway. */
+	{
+		const uint64_t now_ns = callback_start_ns;
+		if (!audio->render_pool && n_sources >= 3 &&
+		    (audio->render_pool_next_attempt_ns == 0 ||
+		     now_ns >= audio->render_pool_next_attempt_ns)) {
+			audio->render_pool = obs_audio_threadpool_create(0, 0);
+			if (audio->render_pool) {
+				audio->render_pool_backoff_ns = 0;
+				audio->render_pool_next_attempt_ns = 0;
+				blog(LOG_INFO,
+				     "obs-audio-threaded: render pool started — "
+				     "%zu worker(s)",
+				     obs_audio_threadpool_num_threads(
+					     audio->render_pool));
+			} else {
+				/* Exponential backoff: 10s → 20s → 40s → … cap 5min. */
+				const uint64_t s10 = 10ULL * 1000000000ULL;
+				const uint64_t cap = 300ULL * 1000000000ULL;
+				audio->render_pool_backoff_ns =
+					audio->render_pool_backoff_ns
+						? (audio->render_pool_backoff_ns * 2 < cap
+							   ? audio->render_pool_backoff_ns * 2
+							   : cap)
+						: s10;
+				audio->render_pool_next_attempt_ns =
+					now_ns + audio->render_pool_backoff_ns;
+				blog(LOG_INFO,
+				     "obs-audio-threaded: render pool unavailable — "
+				     "falling back to serial render (next retry in %llus)",
+				     (unsigned long long)(audio->render_pool_backoff_ns / 1000000000ULL));
+			}
+		}
 	}
 
 	bool use_parallel = (audio->render_pool != NULL && n_sources >= 3 &&

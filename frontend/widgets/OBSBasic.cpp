@@ -28,8 +28,11 @@
 #include <obs-module.h>
 
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
+#include <QStandardPaths>
 #include <QTextStream>
 #include <thread>
 #include <mutex>
@@ -284,15 +287,33 @@ static void AddExtraModulePaths()
 		plugins_data_path = s;
 
 	if (!plugins_path.empty() && !plugins_data_path.empty()) {
-		/* Reject paths with traversal sequences or UNC prefixes
-		 * to prevent env-var-based DLL injection. */
+		/* Reject paths with traversal SEGMENTS or UNC / device-path
+		 * prefixes to prevent env-var-based DLL injection. Substring
+		 * "find(..)" rejected legitimate folders containing the
+		 * sequence in a name (e.g. "v1..2-beta"); switch to segment-
+		 * aware checks. */
 		auto path_looks_safe = [](const string &p) {
-			if (p.find("..") != string::npos)
-				return false;
+			if (p.size() >= 4 &&
+			    p[0] == '\\' && p[1] == '\\' &&
+			    (p[2] == '?' || p[2] == '.') && p[3] == '\\')
+				return false; /* \\?\ or \\.\ device-path */
 			if (p.size() >= 2 &&
 			    ((p[0] == '\\' && p[1] == '\\') ||
 			     (p[0] == '/' && p[1] == '/')))
-				return false;
+				return false; /* UNC */
+			/* Walk segments delimited by / or \ — reject "..". */
+			size_t start = 0;
+			for (size_t i = 0; i <= p.size(); i++) {
+				const bool sep = (i == p.size() ||
+						  p[i] == '/' || p[i] == '\\');
+				if (!sep)
+					continue;
+				const size_t seg_len = i - start;
+				if (seg_len == 2 && p[start] == '.' &&
+				    p[start + 1] == '.')
+					return false;
+				start = i + 1;
+			}
 			return true;
 		};
 		if (!path_looks_safe(plugins_path) ||
@@ -678,36 +699,80 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 		if (!intervalOk || intervalMs < 250)
 			intervalMs = 1000;
 
-		/* Validate the RAW input BEFORE canonicalization
-		 * (absoluteFilePath resolves ".." making post-checks useless) */
+		/* Reject the input if any PATH SEGMENT is exactly ".." (the
+		 * substring check on the prior code rejected legitimate paths
+		 * like "my..folder"), and if it uses a Windows device-path
+		 * prefix that bypasses normal namespace rules. URL-encoded
+		 * sequences like %2e are no-op rejections — Windows file APIs
+		 * never decode them — so they're omitted as theatre. After the
+		 * structural check, canonicalise to absolute and require the
+		 * result to live under a recognised user-writable directory
+		 * (Documents / AppData / explicit allowlist). */
 		const QString rawPath = QString::fromUtf8(perfExportCsv);
-		if (rawPath.contains(QStringLiteral("..")) ||
-		    rawPath.startsWith(QStringLiteral("\\\\")) ||
-		    rawPath.startsWith(QStringLiteral("//")) ||
-		    rawPath.contains(QStringLiteral("::$")) ||
-		    rawPath.contains(QStringLiteral("%2e"), Qt::CaseInsensitive) ||
-		    rawPath.contains(QStringLiteral("%2f"), Qt::CaseInsensitive) ||
-		    rawPath.contains(QStringLiteral("%5c"), Qt::CaseInsensitive)) {
+		bool pathOK = !rawPath.isEmpty();
+		if (pathOK) {
+			const QString lower = rawPath.toLower();
+			/* Block UNC, device-namespace, and ADS prefixes outright. */
+			if (lower.startsWith(QStringLiteral("\\\\")) ||
+			    lower.startsWith(QStringLiteral("//")) ||
+			    lower.startsWith(QStringLiteral("\\\\?\\")) ||
+			    lower.startsWith(QStringLiteral("\\\\.\\")) ||
+			    lower.contains(QStringLiteral("::$"))) {
+				pathOK = false;
+			}
+			/* Reject any PATH SEGMENT that is exactly ".." or "."
+			 * — segment-aware, not substring-aware. */
+			if (pathOK) {
+				const QStringList parts = rawPath.split(
+					QRegularExpression(QStringLiteral("[\\\\/]")));
+				for (const QString &p : parts) {
+					if (p == QStringLiteral("..") ||
+					    p == QStringLiteral(".")) {
+						pathOK = false;
+						break;
+					}
+				}
+			}
+		}
+		if (!pathOK) {
 			blog(LOG_WARNING,
 			     "OBS_PERF_EXPORT_CSV rejected (unsafe path): %s",
 			     perfExportCsv.constData());
 		} else {
-			const QString perfExportPath =
+			const QString canonical =
 				QFileInfo(rawPath).absoluteFilePath();
-			const uint64_t exportStartNs = os_gettime_ns();
-			QTimer *perfExportTimer = new QTimer(this);
-			connect(perfExportTimer, &QTimer::timeout, this,
-				[this, perfExportPath, exportStartNs]() {
-					append_perf_export_sample(
-						this, perfExportPath,
-						exportStartNs);
-				});
-			perfExportTimer->start(intervalMs);
-			append_perf_export_sample(this, perfExportPath,
-						  exportStartNs);
-			blog(LOG_INFO,
-			     "Performance stats export enabled: %s",
-			     perfExportCsv.constData());
+			/* Require canonical path under one of: user home, the
+			 * AppData/profile dir, or /tmp. This is an allowlist —
+			 * unknown roots are refused. */
+			const QString home = QDir::homePath();
+			const QString writableLoc = QStandardPaths::writableLocation(
+				QStandardPaths::AppDataLocation);
+			const QString tmpLoc = QDir::tempPath();
+			const bool underAllow =
+				(!home.isEmpty() && canonical.startsWith(home, Qt::CaseInsensitive)) ||
+				(!writableLoc.isEmpty() && canonical.startsWith(writableLoc, Qt::CaseInsensitive)) ||
+				(!tmpLoc.isEmpty() && canonical.startsWith(tmpLoc, Qt::CaseInsensitive));
+			if (!underAllow) {
+				blog(LOG_WARNING,
+				     "OBS_PERF_EXPORT_CSV rejected (outside user-writable allowlist): %s",
+				     perfExportCsv.constData());
+			} else {
+				const QString perfExportPath = canonical;
+				const uint64_t exportStartNs = os_gettime_ns();
+				QTimer *perfExportTimer = new QTimer(this);
+				connect(perfExportTimer, &QTimer::timeout, this,
+					[this, perfExportPath, exportStartNs]() {
+						append_perf_export_sample(
+							this, perfExportPath,
+							exportStartNs);
+					});
+				perfExportTimer->start(intervalMs);
+				append_perf_export_sample(this, perfExportPath,
+							  exportStartNs);
+				blog(LOG_INFO,
+				     "Performance stats export enabled: %s",
+				     perfExportCsv.constData());
+			}
 		}
 	}
 

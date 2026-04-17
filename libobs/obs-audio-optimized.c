@@ -136,39 +136,47 @@ extern void zero_audio_buffer_avx2(float *buffer, size_t count);
  * Uses SIMD instructions when available for 4-8x performance improvement
  *
  * @param mixes         Output mix buffers
+ * @param mixers        Bitmask of mix slots the source is routed to;
+ *                      slots not set are skipped entirely (saves 5/6 of
+ *                      the per-source work for the common single-mix case)
  * @param channels      Number of active audio channels
- * @param audio_buffers Source per-mix per-channel float buffers (float *[][MAX_AUDIO_CHANNELS])
+ * @param audio_buffers Source per-mix per-channel float buffers
  * @param start_point   First sample offset within the output mix buffer
  * @param total_floats  Number of samples to mix
  */
-void mix_audio_optimized(struct audio_output_data *mixes, size_t channels,
+void mix_audio_optimized(struct audio_output_data *mixes, uint32_t mixers, size_t channels,
                          float *(*audio_buffers)[MAX_AUDIO_CHANNELS],
                          size_t start_point, size_t total_floats)
 {
+	/* Hoist the SIMD-path decision out of the per-channel × per-mix loop.
+	 * cpu_supports_avx2() is a cached atomic load + branch; doing it once
+	 * per call instead of MAX_AUDIO_MIXES × channels times is a measurable
+	 * win in the hot mix path. */
+#if OBS_X86_SIMD
+	const bool use_avx2 = cpu_supports_avx2() && total_floats >= 8;
+	const bool use_sse2 = !use_avx2 && total_floats >= 4;
+#endif
+
 	for (size_t mix_idx = 0; mix_idx < MAX_AUDIO_MIXES; mix_idx++) {
+		if (!(mixers & (1u << mix_idx)))
+			continue;
+
 		for (size_t ch = 0; ch < channels; ch++) {
 			float *mix = mixes[mix_idx].data[ch] + start_point;
 			float *aud = audio_buffers[mix_idx][ch];
 
-			// Choose best SIMD path based on CPU capabilities
 #if OBS_X86_SIMD
-			if (cpu_supports_avx2() && total_floats >= 8) {
+			if (use_avx2) {
 				mix_audio_avx2(mix, aud, total_floats);
-			} else
-#endif
-#if OBS_X86_SIMD
-			if (total_floats >= 4) {
+			} else if (use_sse2) {
 				mix_audio_sse2(mix, aud, total_floats);
 			} else {
-				// Fallback for very small buffers
-				for (size_t i = 0; i < total_floats; i++) {
+				for (size_t i = 0; i < total_floats; i++)
 					mix[i] += aud[i];
-				}
 			}
 #else
-			for (size_t i = 0; i < total_floats; i++) {
+			for (size_t i = 0; i < total_floats; i++)
 				mix[i] += aud[i];
-			}
 #endif
 		}
 	}

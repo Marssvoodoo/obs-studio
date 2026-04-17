@@ -817,6 +817,16 @@ static void set_gpu_converted_data(struct video_frame *output, const struct vide
 	case VIDEO_FORMAT_UYVY:
 	case VIDEO_FORMAT_RGBA:
 	case VIDEO_FORMAT_BGRA:
+	case VIDEO_FORMAT_V210:
+	case VIDEO_FORMAT_R10L:
+		/* 10-bit packed formats — historically a no-op in this path
+		 * because their planar bytes-per-row math doesn't fit the
+		 * naive linesize copy below. Pre-perf-opt branch this fell
+		 * through to `;`. Restoring the no-op explicitly to avoid
+		 * silently producing corrupt video for these formats; if
+		 * GPU conversion for them is added later, give them a real
+		 * dedicated case above this one. */
+		break;
 	case VIDEO_FORMAT_BGRX:
 	case VIDEO_FORMAT_Y800:
 	case VIDEO_FORMAT_BGR3:
@@ -828,8 +838,6 @@ static void set_gpu_converted_data(struct video_frame *output, const struct vide
 	case VIDEO_FORMAT_YUVA:
 	case VIDEO_FORMAT_YA2L:
 	case VIDEO_FORMAT_AYUV:
-	case VIDEO_FORMAT_V210:
-	case VIDEO_FORMAT_R10L:
 	default: {
 		uint32_t heights[MAX_AV_PLANES] = {0};
 		video_frame_get_plane_heights(heights, info->format, info->height);

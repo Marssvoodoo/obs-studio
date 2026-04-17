@@ -1029,6 +1029,22 @@ static void nvenc_destroy(void *data)
 	for (size_t i = 0; i < enc->bitstreams.num; i++) {
 		nv_bitstream_free(enc, &enc->bitstreams.array[i]);
 	}
+
+	/* Destroy ordering — see NVIDIA Video Codec SDK Programming Guide
+	 * §"Releasing Resources" (NVENC SDK 12.x):
+	 *   1. End the encode (EOS sent above).
+	 *   2. Unmap any input/output resources currently mapped.
+	 *   3. Unregister all input/output resources via
+	 *      NvEncUnregisterResource — done inside d3d11_free_textures /
+	 *      cuda_opengl_free / cuda_free_surfaces below.
+	 *   4. Destroy the encoder session via NvEncDestroyEncoder.
+	 *   5. Tear down the underlying graphics/CUDA context.
+	 *
+	 * Reviewer disagreement on this branch: some readers expected
+	 * NvEncDestroyEncoder to come BEFORE the resource frees. The SDK
+	 * sample (NvEncoder::DestroyEncoder) does free registered resources
+	 * first, then destroys the session, then tears down the context.
+	 * Keeping the SDK-sample order. */
 #ifdef _WIN32
 	d3d11_free_textures(enc);
 #else
