@@ -591,7 +591,7 @@ void obs_canvas_render(obs_canvas_t *canvas)
 
 void obs_canvas_disable(obs_canvas_t *canvas)
 {
-	if (!canvas->mix)
+	if (!canvas || !canvas->mix)
 		return;
 
 	obs_canvas_clear_mix(canvas);
@@ -599,6 +599,8 @@ void obs_canvas_disable(obs_canvas_t *canvas)
 
 bool obs_canvas_enable(obs_canvas_t *canvas)
 {
+	if (!canvas)
+		return false;
 	if (canvas->mix)
 		return true;
 
@@ -607,5 +609,5 @@ bool obs_canvas_enable(obs_canvas_t *canvas)
 
 bool obs_canvas_is_enabled(const obs_canvas_t *canvas)
 {
-	return canvas->mix != NULL;
+	return canvas && canvas->mix != NULL;
 }

@@ -181,8 +181,13 @@ static void allocate_audio_output_buffer(struct obs_source *source)
 	const size_t size = sizeof(float) * AUDIO_OUTPUT_FRAMES * MAX_AUDIO_CHANNELS * MAX_AUDIO_MIXES;
 	float *ptr = pool ? (float *)obs_audio_pool_alloc(pool)
 	                  : (float *)bzalloc(size);
-	if (!ptr)
+	if (!ptr) {
+		blog(LOG_ERROR,
+		     "allocate_audio_output_buffer: failed to allocate %zu "
+		     "bytes for source '%s' — source will be silent",
+		     size, source->context.name ? source->context.name : "(unnamed)");
 		return;
+	}
 
 	source->audio_output_buf_pool = pool;
 	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++) {
@@ -200,8 +205,13 @@ static void allocate_audio_mix_buffer(struct obs_source *source)
 	const size_t size = sizeof(float) * AUDIO_OUTPUT_FRAMES * MAX_AUDIO_CHANNELS;
 	float *ptr = pool ? (float *)obs_audio_pool_alloc(pool)
 	                  : (float *)bzalloc(size);
-	if (!ptr)
+	if (!ptr) {
+		blog(LOG_ERROR,
+		     "allocate_audio_mix_buffer: failed to allocate %zu "
+		     "bytes for source '%s' — source will be silent",
+		     size, source->context.name ? source->context.name : "(unnamed)");
 		return;
+	}
 
 	source->audio_mix_buf_pool = pool;
 	for (size_t i = 0; i < MAX_AUDIO_CHANNELS; i++) {

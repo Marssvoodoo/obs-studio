@@ -106,8 +106,14 @@ static inline void mix_audio_sse2(float *mix, const float *aud, size_t count)
 	// Process 4 floats at a time with SSE2
 	for (i = 0; i < simd_count; i += 4) {
 		// Prefetch next cache line (64 bytes ahead)
-		_mm_prefetch((const char *)(aud + i + 16), _MM_HINT_T0);
-		_mm_prefetch((const char *)(mix + i + 16), _MM_HINT_T0);
+		/* Prefetch 64 floats (256 bytes / 4 cache lines) ahead. The
+		 * previous +16 distance landed on the same/next cache line as
+		 * the current SSE2 store, so the prefetch fired 4× per line
+		 * with zero useful effect (the line was already coming in via
+		 * the demand load). 64 floats stays well within reach for a
+		 * single iteration's memory latency. */
+		_mm_prefetch((const char *)(aud + i + 64), _MM_HINT_T0);
+		_mm_prefetch((const char *)(mix + i + 64), _MM_HINT_T0);
 
 		__m128 v_mix = _mm_loadu_ps(&mix[i]);
 		__m128 v_aud = _mm_loadu_ps(&aud[i]);

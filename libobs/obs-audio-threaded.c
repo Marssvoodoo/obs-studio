@@ -69,7 +69,15 @@ static bool claim_job(struct obs_audio_threadpool *pool, struct audio_job *job)
 	if (!jobs)
 		return false;
 
-	while (true) {
+	/* Bound the CAS-loop iterations so a misbehaving filter that never
+	 * returns can't pin a worker forever during shutdown. The realistic
+	 * worst case is `num_jobs - 1` losers per round; 4096 is well past
+	 * any plausible scene-source-count × hyperthread sibling churn. */
+	const int kMaxClaimSpin = 4096;
+	for (int spin = 0; spin < kMaxClaimSpin; spin++) {
+		if (os_atomic_load_bool(&pool->shutdown))
+			return false;
+
 		long num = os_atomic_load_long(&pool->num_jobs);
 		long idx = os_atomic_load_long(&pool->next_job);
 		if (idx >= num)
@@ -86,6 +94,7 @@ static bool claim_job(struct obs_audio_threadpool *pool, struct audio_job *job)
 		*job = jobs[idx];
 		return true;
 	}
+	return false;
 }
 
 static void finish_job(struct obs_audio_threadpool *pool)
@@ -233,9 +242,17 @@ void obs_audio_threadpool_run(struct obs_audio_threadpool *pool,
 		return;
 	}
 
-	/* Clamp to LONG_MAX to prevent truncation on LLP64 (Windows). */
-	if (num_jobs > (size_t)LONG_MAX)
+	/* Clamp to LONG_MAX to prevent truncation on LLP64 (Windows). Hitting
+	 * this means a caller queued >2 billion jobs in one batch — programmer
+	 * bug, not a runtime condition we expect. Log loud so it surfaces. */
+	if (num_jobs > (size_t)LONG_MAX) {
+		blog(LOG_ERROR,
+		     "obs_audio_threadpool_run: batch of %zu jobs clamped to "
+		     "LONG_MAX — caller bug, jobs past the clamp will silently "
+		     "be skipped",
+		     num_jobs);
 		num_jobs = (size_t)LONG_MAX;
+	}
 	long batch_size = (long)num_jobs;
 	long cur_peak;
 	do {

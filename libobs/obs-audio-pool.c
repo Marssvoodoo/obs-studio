@@ -46,7 +46,11 @@ static inline size_t align64(size_t sz)
 }
 
 /* Allocate one arena of n_blocks blocks and push all blocks onto the
- * pool's free list.  Returns false on allocation failure. */
+ * pool's free list.  Returns false on allocation failure.
+ *
+ * CALLER MUST HOLD pool->lock — this function mutates pool->arenas and
+ * pool->free_list. Adding a debug-build assert below would be ideal but
+ * pthread doesn't expose a portable "is this thread the owner" check. */
 /* Maximum blocks per arena — prevents unbounded geometric growth. */
 #define MAX_ARENA_BLOCKS 65536u
 /* Total bytes per single arena allocation — clamps the geometric growth
@@ -89,7 +93,10 @@ static bool pool_grow(struct obs_audio_pool *pool, size_t n_blocks)
 	if (!raw)
 		return false;
 
-	memset(raw, 0, raw_sz);
+	/* Only zero the arena header — block payloads will be re-zeroed by
+	 * obs_audio_pool_alloc on hand-out. memset over the entire raw_sz
+	 * was wasteful (256 MB on a 65k-block arena of 4 KB blocks). */
+	memset(raw, 0, sizeof(struct pool_arena));
 
 	struct pool_arena *arena = (struct pool_arena *)raw;
 	arena->n_blocks = n_blocks;

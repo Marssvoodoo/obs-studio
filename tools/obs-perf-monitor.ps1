@@ -41,10 +41,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# Sanitize ScenarioName — reject path separators and traversal sequences
-if ($ScenarioName -match '[/\\]|\.\.') {
-    Write-Error "ScenarioName contains invalid characters (/, \, or ..): '$ScenarioName'"
-    return
+# Sanitize ScenarioName — reject path separators, traversal sequences,
+# and ANY control character (CR/LF would otherwise inject newlines into
+# the output filename). `return` only exits the current scope; use
+# `exit 1` so the script terminates with a non-zero code instead of
+# continuing with the unsanitised name.
+if ($ScenarioName -match '[/\\]|\.\.|[\x00-\x1f]') {
+    Write-Error "ScenarioName contains invalid characters (/, \, .., or control chars): '$ScenarioName'"
+    exit 1
 }
 $ScenarioName = $ScenarioName -replace '[<>:"|?*]', '_'
 
