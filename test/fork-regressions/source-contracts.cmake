@@ -55,6 +55,8 @@ require_text("plugins/obs-outputs/mp4-output.c" "out->received_first_keyframe = 
 require_regex("plugins/obs-outputs/mp4-output.c" "out->start_time = packet->dts_usec;[\r\n\t ]+out->chapter_base_usec = packet_pts_usec\\(packet\\);[\r\n\t ]+out->received_first_keyframe = true;" "first-keyframe b-frame start correction (upstream f89ad4bee)")
 require_text("plugins/obs-outputs/mp4-output.c" "/ pkt->timebase_den) - out->chapter_base_usec;" "chapters placed from the keyframe presentation time")
 forbid_text("plugins/obs-outputs/mp4-output.c" "/ pkt->timebase_den) - out->start_time;" "chapters shifted by the b-frame reorder delay")
+require_text("plugins/obs-outputs/mp4-mux.c" "duration = track->fragment_samples.array[track->fragment_samples.num - 1].duration;" "last packet kept when finalising a Hybrid file (upstream 575c77f19)")
+require_text("plugins/obs-outputs/mp4-mux.c" "const size_t end_offset = (final_flush && track != mux->chapter_track) ? 0 : 1;" "end-of-file Dummy chapter marker never emitted")
 require_text("plugins/obs-outputs/mp4-output.c" "current_runtime >= out->max_time - 1000LL" "one-sided 1 ms split tolerance")
 forbid_text("plugins/obs-outputs/mp4-output.c" "llabs(out->max_time - current_runtime) < 1000LL" "exact-match split window that never splits on non-dividing keyframe intervals")
 
