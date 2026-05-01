@@ -83,8 +83,26 @@ struct PerfExportWriter {
 				queue.pop_front();
 			}
 			QFile file(path);
-			if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append))
+			if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Append)) {
+				/* Persistent failure (permissions flip, disk full, etc.)
+				 * would otherwise hot-spin the CV/queue.  Surface the
+				 * failure once via blog and back off briefly so a
+				 * sustained outage doesn't burn a core.  Re-check the
+				 * stop flag under the mutex so shutdown is responsive. */
+				static bool warned = false;
+				if (!warned) {
+					blog(LOG_WARNING,
+					     "PerfExportWriter: failed to open '%s' for append; backing off",
+					     path.toUtf8().constData());
+					warned = true;
+				}
+				std::unique_lock<std::mutex> lock(mtx);
+				cv.wait_for(lock, std::chrono::milliseconds(100),
+					    [this]{ return stop; });
+				if (stop && queue.empty())
+					return;
 				continue;
+			}
 			const bool needHeader = (file.size() == 0) && !wroteHeader;
 			QTextStream out(&file);
 			if (needHeader) {
@@ -1746,6 +1764,13 @@ void OBSBasic::applicationShutdown() noexcept
 	delete trayMenu;
 	delete programOptions;
 	delete program;
+
+	/* Stop the perf-export writer worker thread (if started via
+	 * OBS_PERF_EXPORT_CSV) BEFORE its static destructor would otherwise
+	 * run with joinable() == true and call std::terminate(), and before
+	 * libobs accessors used by append_perf_export_sample become invalid
+	 * during obs_shutdown below. */
+	obs_basic_perf_export_shutdown();
 
 	/* XXX: any obs data must be released before calling obs_shutdown.
 	 * currently, we can't automate this with C++ RAII because of the
