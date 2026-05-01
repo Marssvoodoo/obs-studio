@@ -11,7 +11,10 @@ if "%MSBUILD%"=="" (
   set MSBUILD="C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe"
 )
 
-if "%SLN%"=="" set SLN="%~dp0build_x86\obs-studio.sln"
+REM Default to "build" (matches configure_and_build.bat / build_optimized.bat).
+REM Alternates seen in this tree: build_x64\obs-studio.sln, build_x86\obs-studio.sln.
+REM Override via:  set SLN=...  before calling.
+if "%SLN%"=="" set SLN="%~dp0build\obs-studio.sln"
 
 echo Building OBS Studio (Release Win32) with %MSBUILD%
 %MSBUILD% %SLN% /p:Configuration=Release /p:Platform=Win32 /m:8 /v:m

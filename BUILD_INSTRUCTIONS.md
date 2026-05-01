@@ -1,5 +1,14 @@
 # Building OBS with Optimizations
 
+## About the version override
+
+Both `configure_and_build.bat` and `build_optimized.bat` pass
+`-DOBS_VERSION_OVERRIDE="31.0.0-perf"`. The override exists for plugin
+compatibility — many third-party plugins gate themselves on the OBS major
+version string and refuse to load against an unrecognized build. The `-perf`
+suffix lets bug reports be triaged correctly so we can tell the OpenClaw
+performance fork apart from official OBS 31.0.0.
+
 ## ✅ Build System Updated
 The optimization file `obs-audio-optimized.c` has been added to `libobs/CMakeLists.txt`
 

@@ -60,3 +60,12 @@ build-aux/flatpak-github-action-modified-*
 
 # Exclude CMake build number cache
 /cmake/.CMakeBuildNumber
+
+# Hygiene (added 2026-04-28 by org cleanup)
+excalidraw.log
+*.log
+.tmp_playwright/
+replay_pid*.log
+
+# Perf benchmark output (untracked local results)
+tools/results/
