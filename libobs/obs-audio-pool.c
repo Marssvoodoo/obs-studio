@@ -206,16 +206,16 @@ void *obs_audio_pool_alloc(struct obs_audio_pool *pool)
 	pool->outstanding++;
 
 	/* Clear the embedded free-list pointer (first sizeof(void*) bytes)
-	 * BEFORE releasing the lock. The full memset happens outside the
-	 * lock to keep critical-section length minimal, but until that runs
-	 * any concurrent read of the block would see a stale heap pointer
-	 * — an info-leak risk if a consumer ever logs raw audio bytes. */
+	 * and then zero the entire block BEFORE releasing the lock. The full
+	 * memset now runs inside the critical section for info-leak protection
+	 * — any concurrent observer of the block must see all-zero bytes, never
+	 * a stale heap pointer or leftover audio sample data. Cost is a few
+	 * dozen ns per allocation; acceptable given pool reuse rates. */
 	*(void **)block = NULL;
+	memset(block, 0, bsz);
 
 	pthread_mutex_unlock(&pool->lock);
 
-	/* Zero the block before handing it out (audio buffers must start 0). */
-	memset(block, 0, bsz);
 	return block;
 }
 

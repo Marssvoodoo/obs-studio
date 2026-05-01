@@ -730,11 +730,13 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 		bool pathOK = !rawPath.isEmpty();
 		if (pathOK) {
 			const QString lower = rawPath.toLower();
-			/* Block UNC, device-namespace, and ADS prefixes outright. */
+			/* Block UNC, device-namespace, and ADS prefixes outright.
+			 * The "\\\\" / "//" prefix checks subsume the "\\\\?\\"
+			 * and "\\\\.\\" device-path forms, so a single broad
+			 * leading-double-separator test covers UNC + Win32
+			 * device namespace; the "::$" check catches NTFS ADS. */
 			if (lower.startsWith(QStringLiteral("\\\\")) ||
 			    lower.startsWith(QStringLiteral("//")) ||
-			    lower.startsWith(QStringLiteral("\\\\?\\")) ||
-			    lower.startsWith(QStringLiteral("\\\\.\\")) ||
 			    lower.contains(QStringLiteral("::$"))) {
 				pathOK = false;
 			}

@@ -29,7 +29,10 @@
  * starts to eat the parallelism gains. Tuned empirically; if you raise
  * this, also raise OBS_AUDIO_DEFAULT_WORKER_BUDGET so the per-source
  * count target keeps pace. */
-#define MAX_THREADS 16u
+#ifndef OBS_AUDIO_MAX_THREADS
+#define OBS_AUDIO_MAX_THREADS 16u
+#endif
+#define MAX_THREADS OBS_AUDIO_MAX_THREADS
 /* Approximate target sources-per-worker. Used to clamp num_threads on
  * machines with many more cores than active sources, so an idle 64-core
  * Threadripper doesn't wake 16 workers 60×/sec for a 2-source scene. */

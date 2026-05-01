@@ -221,15 +221,16 @@ void copy_video_plane_optimized(uint8_t *dst, const uint8_t *src,
 	}
 
 	/* Detect overlap and fall back to memmove (line-by-line). The SIMD
-	 * paths below assume non-overlapping buffers; comparing pointers across
-	 * unrelated allocations is technically UB but in practice safe on the
-	 * flat address spaces this code targets. We check the full-extent byte
-	 * ranges so legitimate back-to-back single-line buffers don't trip the
-	 * fallback. */
+	 * paths below assume non-overlapping buffers. We compare via uintptr_t
+	 * casts rather than raw pointer relational ops, which is well-defined
+	 * across unrelated allocations on flat address spaces (x86-64, ARM64).
+	 * Check the full-extent byte ranges so legitimate back-to-back
+	 * single-line buffers don't trip the fallback. */
 	{
 		const uint8_t *src_end = src + (size_t)(height - 1) * src_stride + width;
 		const uint8_t *dst_end = dst + (size_t)(height - 1) * dst_stride + width;
-		const bool overlap = !(dst >= src_end || src >= dst_end);
+		const bool overlap = !((uintptr_t)dst >= (uintptr_t)src_end ||
+				       (uintptr_t)src >= (uintptr_t)dst_end);
 		if (overlap) {
 			for (uint32_t y = 0; y < height; y++) {
 				const uint8_t *src_line = src + (size_t)y * src_stride;
