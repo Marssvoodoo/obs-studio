@@ -1005,6 +1005,21 @@ struct obs_source {
 	bool rendering_filter;
 	bool filter_bypass_active;
 
+	/* parallel-audio dispatch synchronisation.
+	 *
+	 * Set under filter_mutex by the audio coordinator just before this
+	 * source is queued for parallel render (see can_parallel_render_source
+	 * + the post-threadpool clear in audio_callback).  obs_source_filter_add
+	 * / obs_source_filter_remove_refless wait on parallel_render_cv (which
+	 * is paired with filter_mutex) until the audio thread has joined its
+	 * worker batch and cleared this flag.  Without this synchronisation, a
+	 * UI-thread filter_add could land between the dispatch decision (zero
+	 * filters seen) and the worker's filter-list walk (one filter present),
+	 * silently running a filter on a worker thread that the audio-filter
+	 * ABI does not contract for. */
+	volatile long parallel_render_pending;
+	pthread_cond_t parallel_render_cv;
+
 	/* sources specific hotkeys */
 	obs_hotkey_pair_id mute_unmute_key;
 	obs_hotkey_id push_to_mute_key;

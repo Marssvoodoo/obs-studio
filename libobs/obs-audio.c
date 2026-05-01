@@ -744,7 +744,21 @@ static inline void clear_audio_output_buf(obs_source_t *source, struct obs_core_
 	}
 }
 
-static inline bool can_parallel_render_source(const obs_source_t *source)
+/* Decide whether a source is eligible for parallel render and, if so, latch
+ * source->parallel_render_pending so that obs_source_filter_add /
+ * obs_source_filter_remove_refless will block on filter_mutex's condvar until
+ * the audio coordinator clears the latch after the threadpool batch joins.
+ *
+ * The latch is critical for correctness: without it, a UI-thread filter_add
+ * could land between the eligibility read (zero filters) and the worker's
+ * filter-list walk (one filter present), silently running a filter on a
+ * worker thread that the legacy OBS audio-filter ABI does not contract for.
+ *
+ * Caller (audio_callback Pass-1 dispatch) is responsible for clearing the
+ * latch via clear_parallel_pending_locked() after obs_audio_threadpool_run
+ * returns.  This must run before the next audio tick or any UI filter_add
+ * will block forever. */
+static inline bool can_parallel_render_source(obs_source_t *source)
 {
 	/* Only parallelise leaf-style sources that render from their own private
 	 * buffers. Sources with audio_render/audio_mix callbacks or composite/
@@ -763,18 +777,21 @@ static inline bool can_parallel_render_source(const obs_source_t *source)
 	 * processing. The legacy OBS audio-filter ABI guarantees serial
 	 * filter_audio execution across all instances of a plugin type, and
 	 * many shipped third-party filters (RNNoise NoiseSuppress, VST hosts,
-	 * compressors) hold un-locked static caches that depend on it. Until
-	 * an opt-in OBS_SOURCE_AUDIO_PARALLEL_SAFE flag is added to the
-	 * source-info ABI, dispatching their filter chains across worker
-	 * threads is a silent thread-safety break we are not willing to ship.
+	 * compressors) hold un-locked static caches that depend on it.
 	 *
-	 * Reading source->filters.num without the filter_mutex is safe here:
-	 * filter add/remove only happens on the graphics thread (or under
-	 * obs_source_filter_add/remove which serialises with the audio thread
-	 * via obs_audio_pending_lock), and we only need an approximate "any
-	 * filters?" answer for partitioning purposes. */
-	if (source->filters.num > 0)
+	 * The check + latch happen atomically under filter_mutex so a
+	 * concurrent obs_source_filter_add cannot slip a filter in between
+	 * the eligibility read and the dispatch.  filter_add/remove waits on
+	 * source->parallel_render_cv whenever parallel_render_pending is set,
+	 * so the worker is guaranteed to see filters.num == 0 for the entire
+	 * duration of its render. */
+	pthread_mutex_lock(&source->filter_mutex);
+	if (source->filters.num > 0) {
+		pthread_mutex_unlock(&source->filter_mutex);
 		return false;
+	}
+	source->parallel_render_pending = 1;
+	pthread_mutex_unlock(&source->filter_mutex);
 
 	return true;
 }
@@ -799,7 +816,16 @@ static inline bool can_parallel_render_source(const obs_source_t *source)
  * If a third-party audio filter relies on single-threaded execution of
  * its callback across all instances, it must be either (a) updated to
  * guard its shared state, or (b) excluded from parallelisation by adding
- * a flag to can_parallel_render_source(). */
+ * a flag to can_parallel_render_source().
+ *
+ * LATCH CLEAR-AFTER-JOIN SEMANTICS: can_parallel_render_source() sets
+ * source->parallel_render_pending = 1 under filter_mutex for every source
+ * that ends up dispatched to a worker.  After obs_audio_threadpool_run()
+ * returns (i.e. the batch has joined and no worker still touches the
+ * source), audio_callback walks render_jobs[0..parallel_jobs) and calls
+ * clear_parallel_pending_locked() to clear the latch and broadcast on
+ * source->parallel_render_cv, releasing any UI thread blocked inside
+ * obs_source_filter_add / obs_source_filter_remove_refless. */
 static void do_audio_render_job(void *param)
 {
 	struct audio_render_job *j = (struct audio_render_job *)param;
@@ -809,6 +835,24 @@ static void do_audio_render_job(void *param)
 	 * clear_audio_output_buf writes only to j->source's own buffers. */
 	if (should_silence_monitored_source(j->source, j->audio))
 		clear_audio_output_buf(j->source, j->audio);
+}
+
+/* Clear the parallel_render_pending latch on every source we dispatched in
+ * this tick and wake any UI thread blocked in obs_source_filter_add /
+ * obs_source_filter_remove_refless.  MUST be called only after
+ * obs_audio_threadpool_run() has returned, so no worker still holds a
+ * reference to j->source's render state.  Each set in
+ * can_parallel_render_source() is paired one-to-one with a clear here. */
+static void clear_parallel_pending_locked(struct audio_render_job *jobs,
+					  size_t n)
+{
+	for (size_t i = 0; i < n; i++) {
+		struct audio_render_job *j = &jobs[i];
+		pthread_mutex_lock(&j->source->filter_mutex);
+		j->source->parallel_render_pending = 0;
+		pthread_cond_broadcast(&j->source->parallel_render_cv);
+		pthread_mutex_unlock(&j->source->filter_mutex);
+	}
 }
 
 bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint64_t *out_ts, uint32_t mixers,
@@ -915,10 +959,19 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 		parallel_jobs++;
 	}
 
-	if (parallel_jobs > 0)
+	if (parallel_jobs > 0) {
 		obs_audio_threadpool_run(audio->render_pool,
 					 audio->render_job_batch,
 					 parallel_jobs);
+		/* The batch has joined: no worker still touches any j->source.
+		 * Pair every parallel_render_pending set in
+		 * can_parallel_render_source() with a clear + broadcast so any
+		 * UI thread blocked in obs_source_filter_add /
+		 * obs_source_filter_remove_refless can proceed before the next
+		 * audio tick (otherwise filter_add would block forever). */
+		clear_parallel_pending_locked(audio->render_jobs,
+					      parallel_jobs);
+	}
 
 	/* ---- Pass 2: composite sources rendered serially in order ---- */
 	for (size_t i = 0; i < n_sources; i++) {

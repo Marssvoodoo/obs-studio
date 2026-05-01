@@ -269,6 +269,11 @@ static bool obs_source_init(struct obs_source *source)
 	if (pthread_mutex_init(&source->media_actions_mutex, NULL) != 0)
 		return false;
 
+	/* paired with filter_mutex; signaled by audio_callback after the
+	 * parallel-render threadpool batch joins.  See struct obs_source. */
+	if (pthread_cond_init(&source->parallel_render_cv, NULL) != 0)
+		return false;
+
 	if (is_audio_source(source) || is_composite_source(source))
 		allocate_audio_output_buffer(source);
 	if (source->info.audio_mix)
@@ -873,6 +878,7 @@ static void obs_source_destroy_defer(struct obs_source *source)
 	pthread_mutex_destroy(&source->caption_cb_mutex);
 	pthread_mutex_destroy(&source->async_mutex);
 	pthread_mutex_destroy(&source->media_actions_mutex);
+	pthread_cond_destroy(&source->parallel_render_cv);
 	obs_data_release(source->private_settings);
 	obs_context_data_free(&source->context);
 
@@ -3127,6 +3133,18 @@ void obs_source_filter_add(obs_source_t *source, obs_source_t *filter)
 
 	pthread_mutex_lock(&source->filter_mutex);
 
+	/* If the audio coordinator dispatched this source for parallel render
+	 * this tick, wait until the threadpool batch joins before mutating the
+	 * filter list.  Without this, a worker thread could walk filters.array
+	 * and observe a filter that was added between (a) the dispatch
+	 * decision (no filters seen) and (b) the worker's filter-list walk —
+	 * silently running the filter on a worker thread that the audio-filter
+	 * ABI does not contract for.  See can_parallel_render_source() in
+	 * obs-audio.c and the post-threadpool clear in audio_callback(). */
+	while (source->parallel_render_pending)
+		pthread_cond_wait(&source->parallel_render_cv,
+				  &source->filter_mutex);
+
 	if (da_find(source->filters, &filter, 0) != DARRAY_INVALID) {
 		blog(LOG_WARNING, "Tried to add a filter that was already "
 				  "present on the source");
@@ -3171,6 +3189,12 @@ static bool obs_source_filter_remove_refless(obs_source_t *source, obs_source_t 
 	size_t idx;
 
 	pthread_mutex_lock(&source->filter_mutex);
+
+	/* See obs_source_filter_add — wait for any in-flight parallel-audio
+	 * dispatch to join before mutating the filter list. */
+	while (source->parallel_render_pending)
+		pthread_cond_wait(&source->parallel_render_cv,
+				  &source->filter_mutex);
 
 	idx = da_find(source->filters, &filter, 0);
 	if (idx == DARRAY_INVALID) {
