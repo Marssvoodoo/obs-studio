@@ -51,6 +51,7 @@ struct mp4_output {
 	struct serializer serializer;
 
 	bool enable_bpm;
+	bool received_first_keyframe;
 
 	volatile bool active;
 	volatile bool stopping;
@@ -292,6 +293,7 @@ static bool mp4_output_start(void *data)
 	out->allow_overwrite = obs_data_get_bool(settings, "allow_overwrite");
 	out->cur_size = 0;
 	out->start_time = 0;
+	out->received_first_keyframe = false;
 
 	/* Get path */
 	const char *path = obs_data_get_string(settings, "path");
@@ -348,8 +350,14 @@ static inline bool should_split(struct mp4_output *out, struct encoder_packet *p
 		return true;
 
 	/* reached maximum duration */
-	if (out->max_time > 0 && packet->dts_usec - out->start_time >= out->max_time)
-		return true;
+	if (out->max_time > 0) {
+		const int64_t current_runtime = packet->dts_usec - out->start_time;
+		/* Allow a small error in timestamps (up to 1 ms). Split at the first
+		 * keyframe at or after the limit: an exact-match window would never
+		 * split when the keyframe interval does not divide the duration. */
+		if (current_runtime >= out->max_time - 1000LL)
+			return true;
+	}
 
 	return false;
 }
@@ -530,6 +538,13 @@ static void mp4_output_packet(void *data, struct encoder_packet *packet)
 			mp4_output_actual_stop(out, 0);
 			goto unlock;
 		}
+	}
+
+	/* Correct start time for b-frames */
+	if (!out->received_first_keyframe && packet->type == OBS_ENCODER_VIDEO && packet->track_idx == 0 &&
+	    packet->keyframe) {
+		out->start_time = packet->dts_usec;
+		out->received_first_keyframe = true;
 	}
 
 	if (out->split_file_enabled) {
