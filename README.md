@@ -1,6 +1,6 @@
 # OBS Studio Claude Code Enhanced
 
-A performance-optimized and security-hardened fork of [OBS Studio](https://obsproject.com), based on upstream version **32.1.0**.
+A performance-optimized and security-hardened fork of [OBS Studio](https://obsproject.com), based on upstream version **32.1.2**.
 
 ---
 
@@ -27,13 +27,26 @@ A performance-optimized and security-hardened fork of [OBS Studio](https://obspr
 
 ### Cherry-Picked Upstream Fixes
 
+**From v32.1.0-cce1:**
+
 - **NVENC Resource Destruction** — Fix resource destruction order (PR #13105)
 - **Integer Overflow Fixes** — Fix integer overflow in D3D11, OpenGL, and image file texture size calculations (PR #13184)
 - **Windows IPC Pipe** — Adjustments for windows ipc-pipe handling (PR #13184)
 - **Plugin Manager Safe Mode** — Improved safe mode behavior for plugin manager
 - **Scene List Events** — Only send frontend event when scene list actually changes
 - **Process Pipe FD Management** — Fix fd double-close and leak in POSIX process pipes
-- **obs-websocket** — Updated to version 5.7.2
+- **obs-websocket 5.7.2** — Version bump
+
+**Added in v32.1.2-cce2:**
+
+- **Crash Handler Hardening** — Disallow overwriting the libobs crash handler (libobs stability)
+- **Windows Process Mitigation** — Apply process mitigation policies (exploit hardening)
+- **Canvas Video Reset/Restore** — Follow-up fix to the canvas enable/disable cluster
+- **obs-websocket 5.7.3** — Latest websocket plugin version
+- **Qt Safety** — Don't store `QT_TO_UTF8` to `std::string` (use-after-free hazard)
+- **System Theme Fix** — Checked control button color not changing in System theme
+- **Frontend Cleanups** — themeWatcher warning, OBSUpdate includes, nested menu styling, About contributing link
+- **obs-vst** — Migrated to v2 of `obs_properties_add_button`
 
 ### Plugins & Tools
 
@@ -65,7 +78,7 @@ Output binary: `build/rundir/Release/bin/64bit/obs64.exe`
 
 ## Base Version
 
-Based on [obsproject/obs-studio](https://github.com/obsproject/obs-studio) tag `32.1.0` (upstream master).
+Based on [obsproject/obs-studio](https://github.com/obsproject/obs-studio) tag `32.1.2` (upstream master).
 
 ## License
 
