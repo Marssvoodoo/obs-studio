@@ -48,6 +48,15 @@ A performance-optimized and security-hardened fork of [OBS Studio](https://obspr
 - **Frontend Cleanups** — themeWatcher warning, OBSUpdate includes, nested menu styling, About contributing link
 - **obs-vst** — Migrated to v2 of `obs_properties_add_button`
 
+**Added in v32.1.2-cce3:**
+
+- **GPU stats in Stats panel (NVIDIA)** — Three new rows surface live GPU telemetry via NVML:
+  - **GPU Usage** — current utilization percentage
+  - **VRAM** — used / total in GB; turns yellow above 85% and red above 95%
+  - **GPU Temperature** — °C reading from the on-board sensor; yellow above 80 °C, red above 85 °C
+
+  NVML is dynamic-loaded (`nvml.dll` on Windows, `libnvidia-ml.so.1` on Linux) so the binary stays linkage-free; non-NVIDIA systems and macOS show `—` instead of failing.
+
 ### Plugins & Tools
 
 - **In-Game Stats Overlay Plugin** (`obs-overlay`) — Real-time performance stats overlay with D3D11 colorspace conversion support
