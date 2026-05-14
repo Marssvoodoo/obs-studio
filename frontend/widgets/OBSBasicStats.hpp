@@ -19,6 +19,9 @@ class OBSBasicStats : public QFrame {
 	QLabel *hddSpace = nullptr;
 	QLabel *recordTimeLeft = nullptr;
 	QLabel *memUsage = nullptr;
+	QLabel *gpuUsage = nullptr;
+	QLabel *vramUsage = nullptr;
+	QLabel *gpuTemp = nullptr;
 
 	QLabel *renderTime = nullptr;
 	QLabel *skippedFrames = nullptr;

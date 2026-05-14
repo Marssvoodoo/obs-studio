@@ -10,10 +10,150 @@
 #include <QScrollArea>
 #include <QVBoxLayout>
 
+#ifdef _WIN32
+#include <windows.h>
+#elif defined(__linux__)
+#include <dlfcn.h>
+#endif
+
 #include "moc_OBSBasicStats.cpp"
 
 #define TIMER_INTERVAL 2000
 #define REC_TIME_LEFT_INTERVAL 30000
+
+/* ---------------------------------------------------------------------------
+ * NVML client — dynamic-load NVIDIA Management Library to surface GPU util,
+ * VRAM, and temperature in the Stats panel. NVML ships with the NVIDIA driver
+ * so no extra dependency at link time. Silently no-ops on non-NVIDIA systems
+ * and on macOS (where NVML is unavailable).
+ * ------------------------------------------------------------------------- */
+
+namespace {
+
+typedef int nvmlReturn_t;
+typedef void *nvmlDevice_t;
+struct nvmlUtilization_t {
+	unsigned int gpu;
+	unsigned int memory;
+};
+struct nvmlMemory_t {
+	unsigned long long total;
+	unsigned long long free;
+	unsigned long long used;
+};
+constexpr int NVML_SUCCESS_OK = 0;
+constexpr int NVML_TEMPERATURE_GPU_SENSOR = 0;
+
+class NVMLClient {
+public:
+	NVMLClient()
+	{
+#ifdef _WIN32
+		lib = LoadLibraryA("nvml.dll");
+#elif defined(__linux__)
+		lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY | RTLD_LOCAL);
+#endif
+		if (!lib)
+			return;
+
+		auto sym = [&](const char *name) -> void * {
+#ifdef _WIN32
+			return reinterpret_cast<void *>(GetProcAddress(static_cast<HMODULE>(lib), name));
+#elif defined(__linux__)
+			return dlsym(lib, name);
+#else
+			(void)name;
+			return nullptr;
+#endif
+		};
+
+		init = reinterpret_cast<decltype(init)>(sym("nvmlInit_v2"));
+		shutdown_ = reinterpret_cast<decltype(shutdown_)>(sym("nvmlShutdown"));
+		getHandle = reinterpret_cast<decltype(getHandle)>(sym("nvmlDeviceGetHandleByIndex_v2"));
+		getUtil = reinterpret_cast<decltype(getUtil)>(sym("nvmlDeviceGetUtilizationRates"));
+		getMemory = reinterpret_cast<decltype(getMemory)>(sym("nvmlDeviceGetMemoryInfo"));
+		getTemp = reinterpret_cast<decltype(getTemp)>(sym("nvmlDeviceGetTemperature"));
+
+		if (!init || !shutdown_ || !getHandle || !getUtil || !getMemory || !getTemp)
+			return;
+		if (init() != NVML_SUCCESS_OK)
+			return;
+		if (getHandle(0, &device) != NVML_SUCCESS_OK) {
+			shutdown_();
+			return;
+		}
+		ok = true;
+	}
+
+	~NVMLClient()
+	{
+		if (ok && shutdown_)
+			shutdown_();
+#ifdef _WIN32
+		if (lib)
+			FreeLibrary(static_cast<HMODULE>(lib));
+#elif defined(__linux__)
+		if (lib)
+			dlclose(lib);
+#endif
+	}
+
+	bool available() const { return ok; }
+
+	bool sampleUtilization(unsigned int &gpu_pct)
+	{
+		if (!ok)
+			return false;
+		nvmlUtilization_t u{};
+		if (getUtil(device, &u) != NVML_SUCCESS_OK)
+			return false;
+		gpu_pct = u.gpu;
+		return true;
+	}
+
+	bool sampleMemory(unsigned long long &used_bytes, unsigned long long &total_bytes)
+	{
+		if (!ok)
+			return false;
+		nvmlMemory_t m{};
+		if (getMemory(device, &m) != NVML_SUCCESS_OK)
+			return false;
+		used_bytes = m.used;
+		total_bytes = m.total;
+		return true;
+	}
+
+	bool sampleTemperature(unsigned int &celsius)
+	{
+		if (!ok)
+			return false;
+		unsigned int t = 0;
+		if (getTemp(device, NVML_TEMPERATURE_GPU_SENSOR, &t) != NVML_SUCCESS_OK)
+			return false;
+		celsius = t;
+		return true;
+	}
+
+private:
+	void *lib = nullptr;
+	bool ok = false;
+	nvmlDevice_t device = nullptr;
+
+	nvmlReturn_t (*init)() = nullptr;
+	nvmlReturn_t (*shutdown_)() = nullptr;
+	nvmlReturn_t (*getHandle)(unsigned int, nvmlDevice_t *) = nullptr;
+	nvmlReturn_t (*getUtil)(nvmlDevice_t, nvmlUtilization_t *) = nullptr;
+	nvmlReturn_t (*getMemory)(nvmlDevice_t, nvmlMemory_t *) = nullptr;
+	nvmlReturn_t (*getTemp)(nvmlDevice_t, int, unsigned int *) = nullptr;
+};
+
+NVMLClient &nvml()
+{
+	static NVMLClient instance;
+	return instance;
+}
+
+} // namespace
 
 void OBSBasicStats::OBSFrontendEvent(enum obs_frontend_event event, void *ptr)
 {
@@ -89,6 +229,15 @@ OBSBasicStats::OBSBasicStats(QWidget *parent, bool closable)
 	newStat("HDDSpaceAvailable", hddSpace, 0);
 	newStat("DiskFullIn", recordTimeLeft, 0);
 	newStat("MemoryUsage", memUsage, 0);
+
+	/* NVIDIA-only via NVML. Labels are hardcoded English because this fork
+	 * intentionally avoids adding new .ini i18n keys. */
+	gpuUsage = new QLabel(this);
+	vramUsage = new QLabel(this);
+	gpuTemp = new QLabel(this);
+	newStatBare(QStringLiteral("GPU Usage:"), gpuUsage, 0);
+	newStatBare(QStringLiteral("VRAM:"), vramUsage, 0);
+	newStatBare(QStringLiteral("GPU Temp:"), gpuTemp, 0);
 
 	fps = new QLabel(this);
 	renderTime = new QLabel(this);
@@ -334,6 +483,57 @@ void OBSBasicStats::Update()
 
 	str = QString::number(num, 'f', 1) + QStringLiteral(" MB");
 	memUsage->setText(str);
+
+	/* ------------------ */
+	/* GPU stats via NVML (NVIDIA only). Missing = "—". */
+
+	NVMLClient &n = nvml();
+	if (n.available()) {
+		unsigned int gpuPct = 0;
+		unsigned long long vramUsed = 0, vramTotal = 0;
+		unsigned int tempC = 0;
+
+		if (n.sampleUtilization(gpuPct))
+			gpuUsage->setText(QString::number(gpuPct) + QStringLiteral("%"));
+		else
+			gpuUsage->setText(QStringLiteral("—"));
+		setClasses(gpuUsage, "");
+
+		if (n.sampleMemory(vramUsed, vramTotal) && vramTotal > 0) {
+			double usedGB = (double)vramUsed / (1024.0 * 1024.0 * 1024.0);
+			double totalGB = (double)vramTotal / (1024.0 * 1024.0 * 1024.0);
+			double ratio = (double)vramUsed / (double)vramTotal;
+			vramUsage->setText(QString("%1 / %2 GB")
+						   .arg(QString::number(usedGB, 'f', 1),
+							QString::number(totalGB, 'f', 1)));
+			if (ratio > 0.95)
+				setClasses(vramUsage, "text-danger");
+			else if (ratio > 0.85)
+				setClasses(vramUsage, "text-warning");
+			else
+				setClasses(vramUsage, "");
+		} else {
+			vramUsage->setText(QStringLiteral("—"));
+			setClasses(vramUsage, "");
+		}
+
+		if (n.sampleTemperature(tempC)) {
+			gpuTemp->setText(QString::number(tempC) + QStringLiteral(" °C"));
+			if (tempC > 85)
+				setClasses(gpuTemp, "text-danger");
+			else if (tempC > 80)
+				setClasses(gpuTemp, "text-warning");
+			else
+				setClasses(gpuTemp, "");
+		} else {
+			gpuTemp->setText(QStringLiteral("—"));
+			setClasses(gpuTemp, "");
+		}
+	} else {
+		gpuUsage->setText(QStringLiteral("—"));
+		vramUsage->setText(QStringLiteral("—"));
+		gpuTemp->setText(QStringLiteral("—"));
+	}
 
 	/* ------------------ */
 
