@@ -57,6 +57,10 @@ A performance-optimized and security-hardened fork of [OBS Studio](https://obspr
 
   NVML is dynamic-loaded (`nvml.dll` on Windows, `libnvidia-ml.so.1` on Linux) so the binary stays linkage-free; non-NVIDIA systems and macOS show `—` instead of failing.
 
+**Added in v32.1.2-cce4:**
+
+- **Customizable Stats panel** — A new **Configure…** button next to Reset/Close opens a dialog with a checkbox per row. Hide any combination of CPU, Disk Space, Time Until Disk Full, Memory, GPU Usage, VRAM, GPU Temperature, FPS, Average Render Time, Missed Frames, or Skipped Frames. Selections persist under `[Stats]/show_*` in the user config and apply immediately on accept. Defaults to all-visible so existing setups are unchanged.
+
 ### Plugins & Tools
 
 - **In-Game Stats Overlay Plugin** (`obs-overlay`) — Real-time performance stats overlay with D3D11 colorspace conversion support
