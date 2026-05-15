@@ -4,6 +4,9 @@
 
 #include <qt-wrappers.hpp>
 
+#include <QCheckBox>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QGridLayout>
 #include <QLabel>
 #include <QPushButton>
@@ -202,16 +205,23 @@ OBSBasicStats::OBSBasicStats(QWidget *parent, bool closable)
 
 	int row = 0;
 
-	auto newStatBare = [&](QString name, QWidget *label, int col) {
+	auto newStatBare = [&](QString name, QWidget *label, int col, const QString &configKey = QString(),
+			       const QString &displayName = QString()) {
 		QLabel *typeLabel = new QLabel(name, this);
 		topLayout->addWidget(typeLabel, row, col);
 		topLayout->addWidget(label, row++, col + 1);
+		QLabel *valueLabel = qobject_cast<QLabel *>(label);
+		if (!configKey.isEmpty() && valueLabel) {
+			RegisterStatRow(typeLabel, valueLabel, configKey,
+					displayName.isEmpty() ? name : displayName);
+		}
 	};
 
-	auto newStat = [&](const char *strLoc, QWidget *label, int col) {
+	auto newStat = [&](const char *strLoc, QWidget *label, int col, const QString &configKey = QString(),
+			   const QString &displayName = QString()) {
 		std::string str = "Basic.Stats.";
 		str += strLoc;
-		newStatBare(QTStr(str.c_str()), label, col);
+		newStatBare(QTStr(str.c_str()), label, col, configKey, displayName);
 	};
 
 	/* --------------------------------------------- */
@@ -225,19 +235,19 @@ OBSBasicStats::OBSBasicStats(QWidget *parent, bool closable)
 	int textWidth = recordTimeLeft->fontMetrics().boundingRect(str).width();
 	recordTimeLeft->setMinimumWidth(textWidth);
 
-	newStat("CPUUsage", cpuUsage, 0);
-	newStat("HDDSpaceAvailable", hddSpace, 0);
-	newStat("DiskFullIn", recordTimeLeft, 0);
-	newStat("MemoryUsage", memUsage, 0);
+	newStat("CPUUsage", cpuUsage, 0, "show_cpu", QStringLiteral("CPU Usage"));
+	newStat("HDDSpaceAvailable", hddSpace, 0, "show_hdd", QStringLiteral("Disk Space Available"));
+	newStat("DiskFullIn", recordTimeLeft, 0, "show_disk_full", QStringLiteral("Time Until Disk Full"));
+	newStat("MemoryUsage", memUsage, 0, "show_mem", QStringLiteral("Memory Usage"));
 
 	/* NVIDIA-only via NVML. Labels are hardcoded English because this fork
 	 * intentionally avoids adding new .ini i18n keys. */
 	gpuUsage = new QLabel(this);
 	vramUsage = new QLabel(this);
 	gpuTemp = new QLabel(this);
-	newStatBare(QStringLiteral("GPU Usage:"), gpuUsage, 0);
-	newStatBare(QStringLiteral("VRAM:"), vramUsage, 0);
-	newStatBare(QStringLiteral("GPU Temp:"), gpuTemp, 0);
+	newStatBare(QStringLiteral("GPU Usage:"), gpuUsage, 0, "show_gpu", QStringLiteral("GPU Usage"));
+	newStatBare(QStringLiteral("VRAM:"), vramUsage, 0, "show_vram", QStringLiteral("VRAM"));
+	newStatBare(QStringLiteral("GPU Temp:"), gpuTemp, 0, "show_gpu_temp", QStringLiteral("GPU Temperature"));
 
 	fps = new QLabel(this);
 	renderTime = new QLabel(this);
@@ -250,18 +260,20 @@ OBSBasicStats::OBSBasicStats(QWidget *parent, bool closable)
 
 	row = 0;
 
-	newStatBare("FPS", fps, 2);
-	newStat("AverageTimeToRender", renderTime, 2);
-	newStat("MissedFrames", missedFrames, 2);
-	newStat("SkippedFrames", skippedFrames, 2);
+	newStatBare("FPS", fps, 2, "show_fps", QStringLiteral("FPS"));
+	newStat("AverageTimeToRender", renderTime, 2, "show_render_time", QStringLiteral("Average Time To Render"));
+	newStat("MissedFrames", missedFrames, 2, "show_missed", QStringLiteral("Missed Frames"));
+	newStat("SkippedFrames", skippedFrames, 2, "show_skipped", QStringLiteral("Skipped Frames"));
 
 	/* --------------------------------------------- */
 	QPushButton *closeButton = nullptr;
 	if (closable)
 		closeButton = new QPushButton(QTStr("Close"));
 	QPushButton *resetButton = new QPushButton(QTStr("Reset"));
+	QPushButton *configureButton = new QPushButton(QStringLiteral("Configure…"));
 	QHBoxLayout *buttonLayout = new QHBoxLayout;
 	buttonLayout->addStretch();
+	buttonLayout->addWidget(configureButton);
 	buttonLayout->addWidget(resetButton);
 	if (closable)
 		buttonLayout->addWidget(closeButton);
@@ -310,6 +322,9 @@ OBSBasicStats::OBSBasicStats(QWidget *parent, bool closable)
 	if (closable)
 		connect(closeButton, &QPushButton::clicked, this, [this]() { close(); });
 	connect(resetButton, &QPushButton::clicked, this, [this]() { Reset(); });
+	connect(configureButton, &QPushButton::clicked, this, &OBSBasicStats::Configure);
+
+	ApplyStatVisibility();
 
 	delete shortcutFilter;
 	shortcutFilter = CreateShortcutFilter();
@@ -778,4 +793,75 @@ void OBSBasicStats::showEvent(QShowEvent *)
 void OBSBasicStats::hideEvent(QHideEvent *)
 {
 	timer.stop();
+}
+
+/* ---------------------------------------------------------------------------
+ * Customizable rows — persist per-row show/hide in config under [Stats]/show_*.
+ * Default is true (visible) so a fresh config preserves the existing UX.
+ * ------------------------------------------------------------------------- */
+
+void OBSBasicStats::RegisterStatRow(QLabel *name, QLabel *value, const QString &configKey,
+				    const QString &displayName)
+{
+	StatRow row;
+	row.name = name;
+	row.value = value;
+	row.configKey = configKey;
+	row.displayName = displayName;
+	statRows.append(row);
+}
+
+void OBSBasicStats::ApplyStatVisibility()
+{
+	OBSBasic *main = OBSBasic::Get();
+	config_t *cfg = main->Config();
+	for (const StatRow &row : statRows) {
+		QByteArray keyBytes = row.configKey.toUtf8();
+		config_set_default_bool(cfg, "Stats", keyBytes.constData(), true);
+		bool visible = config_get_bool(cfg, "Stats", keyBytes.constData());
+		if (row.name)
+			row.name->setVisible(visible);
+		if (row.value)
+			row.value->setVisible(visible);
+	}
+}
+
+void OBSBasicStats::Configure()
+{
+	QDialog dlg(this);
+	dlg.setWindowTitle(QStringLiteral("Customize Stats"));
+
+	QVBoxLayout *layout = new QVBoxLayout(&dlg);
+	QLabel *header = new QLabel(QStringLiteral("Show these rows in the Stats panel:"), &dlg);
+	layout->addWidget(header);
+
+	OBSBasic *main = OBSBasic::Get();
+	config_t *cfg = main->Config();
+	QList<QCheckBox *> boxes;
+	boxes.reserve(statRows.size());
+
+	for (const StatRow &row : statRows) {
+		QCheckBox *cb = new QCheckBox(row.displayName, &dlg);
+		QByteArray keyBytes = row.configKey.toUtf8();
+		config_set_default_bool(cfg, "Stats", keyBytes.constData(), true);
+		cb->setChecked(config_get_bool(cfg, "Stats", keyBytes.constData()));
+		cb->setProperty("configKey", row.configKey);
+		layout->addWidget(cb);
+		boxes.append(cb);
+	}
+
+	QDialogButtonBox *buttons =
+		new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+	layout->addWidget(buttons);
+	connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+	connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+	if (dlg.exec() == QDialog::Accepted) {
+		for (QCheckBox *cb : boxes) {
+			QByteArray keyBytes = cb->property("configKey").toString().toUtf8();
+			config_set_bool(cfg, "Stats", keyBytes.constData(), cb->isChecked());
+		}
+		config_save_safe(cfg, "tmp", nullptr);
+		ApplyStatVisibility();
+	}
 }

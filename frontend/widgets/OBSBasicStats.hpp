@@ -27,6 +27,20 @@ class OBSBasicStats : public QFrame {
 	QLabel *skippedFrames = nullptr;
 	QLabel *missedFrames = nullptr;
 
+	/* Customizable row registry — populated during construction; used by
+	 * the Configure dialog and ApplyStatVisibility() to toggle rows. */
+	struct StatRow {
+		QPointer<QLabel> name;
+		QPointer<QLabel> value;
+		QString configKey;
+		QString displayName;
+	};
+	QList<StatRow> statRows;
+
+	void RegisterStatRow(QLabel *name, QLabel *value, const QString &configKey,
+			     const QString &displayName);
+	void ApplyStatVisibility();
+
 	QGridLayout *outputLayout = nullptr;
 
 	os_cpu_usage_info_t *cpu_info = nullptr;
@@ -78,6 +92,7 @@ private:
 
 private slots:
 	void RecordingTimeLeft();
+	void Configure();
 
 public slots:
 	void Reset();
