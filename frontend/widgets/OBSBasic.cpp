@@ -70,6 +70,15 @@ struct PerfExportWriter {
 	static constexpr size_t kMaxQueue = 64;
 	size_t dropped = 0;
 
+	~PerfExportWriter()
+	{
+		/* Stop and join the worker even if applicationShutdown() /
+		 * obs_basic_perf_export_shutdown() never ran (early or abnormal
+		 * exit). Destroying a still-joinable std::thread would otherwise
+		 * call std::terminate. shutdown() is idempotent. */
+		shutdown();
+	}
+
 	void run()
 	{
 		for (;;) {

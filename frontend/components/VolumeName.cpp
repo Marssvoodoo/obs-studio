@@ -175,8 +175,11 @@ void VolumeName::onRenamed(QString name)
 void VolumeName::setText(const QString &text)
 {
 	QAbstractButton::setText(text);
-	updateGeometry();
+	/* Refresh fullText (which sizeHint()/minimumSizeHint() read) BEFORE
+	 * asking for re-layout, so any synchronous size-hint query triggered
+	 * by updateGeometry() uses the new name's width, not the previous. */
 	updateLabelText(text);
+	updateGeometry();
 }
 
 void VolumeName::updateLabelText(const QString &name)

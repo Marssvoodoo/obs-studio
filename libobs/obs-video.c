@@ -36,23 +36,6 @@ extern void copy_video_plane_optimized(uint8_t *dst, const uint8_t *src,
                                        uint32_t width, uint32_t height,
                                        uint32_t dst_stride, uint32_t src_stride);
 
-static void mark_as_ticked(obs_source_t *parent, obs_source_t *child, void *param)
-{
-	UNUSED_PARAMETER(param);
-	UNUSED_PARAMETER(parent);
-
-	child->ticked = child->enabled;
-
-	/* Hold filter_mutex across the read: a UI-thread filter add/remove
-	 * mutates filters.array under the same mutex, and the resulting
-	 * darray realloc would otherwise race with this read. */
-	pthread_mutex_lock(&child->filter_mutex);
-	for (size_t i = 0; i < child->filters.num; i++) {
-		child->filters.array[i]->ticked = child->filters.array[i]->enabled;
-	}
-	pthread_mutex_unlock(&child->filter_mutex);
-}
-
 static uint64_t tick_sources(uint64_t cur_time, uint64_t last_time)
 {
 	struct obs_core_data *data = &obs->data;
@@ -97,52 +80,11 @@ static uint64_t tick_sources(uint64_t cur_time, uint64_t last_time)
 	pthread_mutex_unlock(&data->sources_mutex);
 
 	/* ------------------------------------- */
-
-	/* Mark all enabled private sources as ticked. */
-	for (size_t i = 0; i < data->sources_to_tick.num; i++) {
-		obs_source_t *s = data->sources_to_tick.array[i];
-		s->ticked = s->context.private && s->enabled;
-	}
-
-	/* Walk all mixes and their views' sources, mark all enabled sources as ticked. */
-	pthread_mutex_lock(&obs->video.mixes_mutex);
-
-	for (size_t i = 0; i < obs->video.mixes.num; i++) {
-		struct obs_core_video_mix *mix = obs->video.mixes.array[i];
-		if (!mix->view)
-			continue;
-
-		pthread_mutex_lock(&mix->view->channels_mutex);
-		for (size_t j = 0; j < MAX_CHANNELS; j++) {
-			obs_source_t *s = mix->view->channels[j];
-			if (s) {
-				s->ticked = s->enabled;
-				/* Also tick the top-level source's own filter
-				 * chain — enum_full_tree walks descendants but
-				 * this scope is the filters that live ON the
-				 * channel root itself.  Hold filter_mutex to
-				 * race-protect against UI-thread filter
-				 * add/remove on the channel root. */
-				pthread_mutex_lock(&s->filter_mutex);
-				for (size_t k = 0; k < s->filters.num; k++) {
-					obs_source_t *f = s->filters.array[k];
-					f->ticked = f->enabled;
-				}
-				pthread_mutex_unlock(&s->filter_mutex);
-				obs_source_enum_full_tree(s, mark_as_ticked, NULL);
-			}
-		}
-		pthread_mutex_unlock(&mix->view->channels_mutex);
-	}
-
-	pthread_mutex_unlock(&obs->video.mixes_mutex);
-
-	/* ------------------------------------- */
 	/* call the tick function of each source */
 
 	for (size_t i = 0; i < data->sources_to_tick.num; i++) {
 		obs_source_t *s = data->sources_to_tick.array[i];
-		if (!obs_source_removed(s) && s->ticked) {
+		if (!obs_source_removed(s)) {
 			const uint64_t start = source_profiler_source_tick_start();
 			obs_source_video_tick(s, seconds);
 			source_profiler_source_tick_end(s, start);
@@ -819,14 +761,6 @@ static void set_gpu_converted_data(struct video_frame *output, const struct vide
 	case VIDEO_FORMAT_BGRA:
 	case VIDEO_FORMAT_V210:
 	case VIDEO_FORMAT_R10L:
-		/* 10-bit packed formats — historically a no-op in this path
-		 * because their planar bytes-per-row math doesn't fit the
-		 * naive linesize copy below. Pre-perf-opt branch this fell
-		 * through to `;`. Restoring the no-op explicitly to avoid
-		 * silently producing corrupt video for these formats; if
-		 * GPU conversion for them is added later, give them a real
-		 * dedicated case above this one. */
-		break;
 	case VIDEO_FORMAT_BGRX:
 	case VIDEO_FORMAT_Y800:
 	case VIDEO_FORMAT_BGR3:
@@ -838,27 +772,14 @@ static void set_gpu_converted_data(struct video_frame *output, const struct vide
 	case VIDEO_FORMAT_YUVA:
 	case VIDEO_FORMAT_YA2L:
 	case VIDEO_FORMAT_AYUV:
-	default: {
-		uint32_t heights[MAX_AV_PLANES] = {0};
-		video_frame_get_plane_heights(heights, info->format, info->height);
-
-		for (uint32_t plane = 0; plane < MAX_AV_PLANES; plane++) {
-			if (!heights[plane] || !input->data[plane] || !output->data[plane])
-				continue;
-
-			uint32_t bytes = input->linesize[plane];
-			if (output->linesize[plane] < bytes)
-				bytes = output->linesize[plane];
-
-			copy_video_plane_optimized(output->data[plane],
-						   input->data[plane], bytes,
-						   heights[plane],
-						   output->linesize[plane],
-						   input->linesize[plane]);
-		}
-
+	default:
+		/* GPU conversion is unimplemented for these formats. Match
+		 * upstream and leave the output frame untouched: a generic
+		 * planar copy here would silently produce corrupt or truncated
+		 * video (e.g. when the output linesize is smaller than the
+		 * input's). If GPU conversion is added for one of these, give
+		 * it a dedicated case above. */
 		break;
-	}
 	}
 }
 

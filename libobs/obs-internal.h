@@ -481,28 +481,23 @@ struct obs_core_audio {
 	struct audio_render_job *render_jobs;
 	size_t render_jobs_capacity;
 	bool graph_hooks_connected;
-	/* Sticky once we have tried to create the render pool, so a transient
-	 * pthread_create failure (e.g., RLIMIT_NPROC) doesn't cause the audio
-	 * callback to retry creation 60×/sec and spam the log. (Legacy field
-	 * kept for source-compat; superseded by the backoff fields below.) */
-	bool render_pool_create_attempted;
 	/* Exponential backoff for render-pool create retries. _next_attempt_ns
 	 * is an absolute monotonic timestamp (os_gettime_ns scale); 0 = "try
 	 * immediately on next callback that meets the source threshold".
 	 * _backoff_ns holds the current backoff window so we can double it. */
 	uint64_t render_pool_next_attempt_ns;
 	uint64_t render_pool_backoff_ns;
-	/* Hot-write atomic counters with cache-line padding before/after to
+	/* Hot-write atomic counters with cache-line padding on each side to
 	 * avoid false-sharing with render_pool / render_jobs / monitoring_*
-	 * which are heavily read by worker threads. The audio thread bumps
-	 * these counters every callback and the GUI thread reads them via
-	 * accessor functions; without padding, worker reads of the
-	 * neighbouring fields would invalidate the line on every increment.
-	 *
-	 * Layout: 64-byte pad, the 9 atomic counters (9 × 4 = 36 bytes on
-	 * Windows LLP64 / 9 × 8 = 72 bytes on Linux LP64), 64-byte pad. */
+	 * (heavily read by worker threads).  graph_dirty is written by
+	 * UI/signal-handler threads (mark_audio_graph_dirty), so it gets its
+	 * own line via _stats_pad_mid to keep it off the same cache line as
+	 * the audio-thread-only callback_* counters — otherwise every
+	 * per-callback bump on the audio thread would invalidate the line a
+	 * signal thread is writing graph_dirty into, and vice versa. */
 	char _stats_pad_before[64];
-	volatile long graph_dirty;
+	volatile long graph_dirty; /* written by signal threads + audio thread */
+	char _stats_pad_mid[64];
 	volatile long graph_rebuilds;
 	volatile long callback_last_ns;
 	volatile long callback_avg_ns;
@@ -886,9 +881,6 @@ struct obs_source {
 
 	/*  used to indicate if the source should show up when queried for user ui */
 	bool temp_removed;
-
-	/* Whether this source should be ticked. */
-	bool ticked;
 
 	bool active;
 	bool showing;

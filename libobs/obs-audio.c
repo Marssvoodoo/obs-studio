@@ -805,18 +805,15 @@ static inline bool can_parallel_render_source(obs_source_t *source)
  * can_parallel_render_source()).  Such sources operate exclusively on their
  * own private buffers, so no cross-source synchronisation is required.
  *
- * AUDIO FILTER CONTRACT (new in this branch): each source's audio filter
- * chain is invoked from the worker thread that processes that source.
- * Two different sources may execute their filter chains concurrently on
- * different workers.  Audio filters MUST therefore be thread-safe with
- * respect to any state shared across filter instances of the same type
- * (typically a static/global cache).  Per-instance state is not at risk
- * because no source is dispatched to more than one worker per tick.
- *
- * If a third-party audio filter relies on single-threaded execution of
- * its callback across all instances, it must be either (a) updated to
- * guard its shared state, or (b) excluded from parallelisation by adding
- * a flag to can_parallel_render_source().
+ * AUDIO FILTERS: sources with any attached filter are excluded from
+ * parallelisation (can_parallel_render_source() requires filters.num == 0),
+ * so a worker never invokes an audio-filter callback.  The
+ * parallel_render_pending latch + parallel_render_cv exist precisely to keep
+ * that invariant: they make obs_source_filter_add /
+ * obs_source_filter_remove_refless block while a source is dispatched, so a
+ * filter cannot be slipped onto a source between the eligibility check and the
+ * worker's render.  No cross-instance filter thread-safety is therefore
+ * required.
  *
  * LATCH CLEAR-AFTER-JOIN SEMANTICS: can_parallel_render_source() sets
  * source->parallel_render_pending = 1 under filter_mutex for every source
@@ -900,9 +897,7 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 	 * so this check is inherently thread-safe. After a creation failure
 	 * we back off exponentially (start at ~10s, double up to ~5min)
 	 * instead of giving up forever — transient causes (RLIMIT_NPROC,
-	 * cgroup limits, brief OOM) often clear, and the previous
-	 * sticky-forever flag could be defeated by a non-destroying audio
-	 * reset clearing render_pool_create_attempted via memset anyway. */
+	 * cgroup limits, brief OOM) often clear. */
 	{
 		const uint64_t now_ns = callback_start_ns;
 		if (!audio->render_pool && n_sources >= 3 &&
@@ -973,12 +968,26 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 					      parallel_jobs);
 	}
 
-	/* ---- Pass 2: composite sources rendered serially in order ---- */
+	/* ---- Pass 2: composite/ineligible sources rendered serially ---- */
+	/* Sources dispatched in Pass 1 were appended to render_jobs[] in
+	 * render_order sequence, so they form an in-order subsequence of
+	 * render_order.  Walk both with a single cursor (pj) and skip the
+	 * already-rendered ones.  This deliberately does NOT re-invoke
+	 * can_parallel_render_source() as a predicate: that function latches
+	 * source->parallel_render_pending, and using it here would re-arm the
+	 * latch with no matching clear (breaking the 1:1 set/clear invariant
+	 * and stalling obs_source_filter_add/remove).  Skipping by identity
+	 * also guarantees a source rendered on a worker is never rendered a
+	 * second time here, even if a filter was added in between. */
+	size_t pj = 0;
 	for (size_t i = 0; i < n_sources; i++) {
 		obs_source_t *source = audio->render_order.array[i];
-		if (obs_source_removed(source))
+		if (pj < parallel_jobs &&
+		    audio->render_jobs[pj].source == source) {
+			pj++;
 			continue;
-		if (parallel_jobs > 0 && can_parallel_render_source(source))
+		}
+		if (obs_source_removed(source))
 			continue;
 		obs_source_audio_render(source, mixers, channels, sample_rate,
 					audio_size);

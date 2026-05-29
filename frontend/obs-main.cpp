@@ -830,8 +830,10 @@ static void set_process_mitigations(void)
 		PROCESS_MITIGATION_ASLR_POLICY aslr = {0};
 		aslr.EnableBottomUpRandomization = 1;
 		aslr.EnableHighEntropy = 1;
-		aslr.EnableForceRelocateImages = 1;
-		aslr.DisallowStrippedImages = 1;
+		/* Deliberately NOT setting EnableForceRelocateImages /
+		 * DisallowStrippedImages: those make the loader refuse any
+		 * module without a relocation table, which breaks legitimate
+		 * third-party plugin/capture-helper DLLs that ship stripped. */
 		pSetProcessMitigationPolicy(ProcessASLRPolicy, &aslr, sizeof(aslr));
 
 		PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY xpoints = {0};

@@ -53,6 +53,13 @@ struct obs_audio_threadpool {
 
 	volatile long next_job;
 	volatile long pending;
+	/* Count of worker threads that have woken for the current batch and are
+	 * still inside drain_batch().  obs_audio_threadpool_run() waits for this
+	 * to reach zero (in addition to pending) before returning, so no worker
+	 * can outlive the batch and dereference the jobs[] array after the
+	 * caller frees/reuses it on a later tick. Touched only under
+	 * work_mutex / via os_atomic. */
+	volatile long active_workers;
 	volatile long batch_serial;
 	volatile long peak_batch_size;
 };
@@ -138,9 +145,26 @@ static void *worker_thread(void *arg)
 		}
 
 		seen_serial = os_atomic_load_long(&pool->batch_serial);
+		/* Register as active for this batch BEFORE releasing the mutex.
+		 * obs_audio_threadpool_run() reads active_workers under the same
+		 * mutex, so it can never observe us as idle while we go on to
+		 * dereference the jobs[] array — closing the window where a
+		 * straggling worker outlived the batch and read a freed/reused
+		 * jobs array on a later tick. */
+		os_atomic_inc_long(&pool->active_workers);
 		pthread_mutex_unlock(&pool->work_mutex);
 
 		drain_batch(pool);
+
+		/* Leaving the batch: drop our active count and, once the batch is
+		 * fully drained (no pending jobs and no other active worker),
+		 * wake the coordinator blocked in obs_audio_threadpool_run() /
+		 * obs_audio_threadpool_destroy(). */
+		pthread_mutex_lock(&pool->work_mutex);
+		if (os_atomic_dec_long(&pool->active_workers) == 0 &&
+		    os_atomic_load_long(&pool->pending) == 0)
+			pthread_cond_broadcast(&pool->done_cond);
+		pthread_mutex_unlock(&pool->work_mutex);
 	}
 
 	return NULL;
@@ -179,6 +203,7 @@ struct obs_audio_threadpool *obs_audio_threadpool_create(size_t num_threads,
 	pool->num_jobs = 0;
 	pool->next_job = 0;
 	pool->pending = 0;
+	pool->active_workers = 0;
 	pool->batch_serial = 0;
 	pool->peak_batch_size = 0;
 
@@ -217,7 +242,8 @@ void obs_audio_threadpool_destroy(struct obs_audio_threadpool *pool)
 		return;
 
 	pthread_mutex_lock(&pool->work_mutex);
-	while (os_atomic_load_long(&pool->pending) > 0)
+	while (os_atomic_load_long(&pool->pending) > 0 ||
+	       os_atomic_load_long(&pool->active_workers) > 0)
 		pthread_cond_wait(&pool->done_cond, &pool->work_mutex);
 	os_atomic_set_bool(&pool->shutdown, true);
 	pthread_cond_broadcast(&pool->work_cond);
@@ -279,7 +305,8 @@ void obs_audio_threadpool_run(struct obs_audio_threadpool *pool,
 	drain_batch(pool);
 
 	pthread_mutex_lock(&pool->work_mutex);
-	while (os_atomic_load_long(&pool->pending) > 0)
+	while (os_atomic_load_long(&pool->pending) > 0 ||
+	       os_atomic_load_long(&pool->active_workers) > 0)
 		pthread_cond_wait(&pool->done_cond, &pool->work_mutex);
 	pool->jobs = NULL;
 	os_atomic_set_long(&pool->num_jobs, 0);

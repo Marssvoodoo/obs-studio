@@ -308,7 +308,12 @@ bool obs_canvas_reset_video_internal(obs_canvas_t *canvas, struct obs_video_info
 
 	obs_canvas_clear_mix(canvas);
 
-	canvas->ovi = *ovi;
+	/* A NULL ovi means "recreate the mix from the canvas's stored ovi"
+	 * (the enable/restore path); only overwrite when a new ovi is given.
+	 * Guards against the NULL deref left reachable by the early-return
+	 * above when canvas->mix is non-NULL. */
+	if (ovi)
+		canvas->ovi = *ovi;
 	canvas->mix = obs_create_video_mix(&canvas->ovi);
 	if (canvas->mix) {
 		canvas->mix->view = &canvas->view;
