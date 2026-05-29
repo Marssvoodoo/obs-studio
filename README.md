@@ -12,7 +12,6 @@ A performance-optimized and security-hardened fork of [OBS Studio](https://obspr
 - **Multi-Threaded Audio Rendering** — Lock-free thread pool for parallel audio source rendering with automatic scaling based on source count
 - **Audio Memory Pooling** — Pre-allocated buffer pools for audio render and output buffers, eliminating per-frame allocations
 - **Optimized Video Frame Copy** — SIMD-accelerated `copy_video_plane_optimized()` with prefetching and non-temporal stores for planes >256KB
-- **Skip Unused Source Ticking** — Sources not included in any active mix are no longer ticked, reducing idle CPU usage
 - **Canvas Enable/Disable** — Explicit API to disable inactive canvases, preventing unnecessary rendering work
 - **Stop Event Prioritization** — WaitForMultipleObjects now prioritizes stop events over processing, improving shutdown responsiveness
 
@@ -60,6 +59,15 @@ A performance-optimized and security-hardened fork of [OBS Studio](https://obspr
 **Added in v32.1.2-cce4:**
 
 - **Customizable Stats panel** — A new **Configure…** button next to Reset/Close opens a dialog with a checkbox per row. Hide any combination of CPU, Disk Space, Time Until Disk Full, Memory, GPU Usage, VRAM, GPU Temperature, FPS, Average Render Time, Missed Frames, or Skipped Frames. Selections persist under `[Stats]/show_*` in the user config and apply immediately on accept. Defaults to all-visible so existing setups are unchanged.
+
+**Added in v32.1.2-cce5 (stability/correctness):**
+
+- **Parallel audio render fixes** — Resolved a `parallel_render_pending` latch that was re-armed without a matching clear (could stall `obs_source_filter_add`/`remove`) and a mid-tick double-render window. The audio thread pool now waits for every woken worker to leave the batch before the per-tick job array is reused, closing a use-after-free.
+- **Reverted "Skip Unused Source Ticking"** — it could freeze deferred source updates and async/media frame timing for off-screen sources. All non-removed sources are ticked again (matching upstream); this also removes a lock-ordering risk from the per-tick marking pass.
+- **GPU conversion correctness** — Unimplemented color formats are left untouched (upstream behavior) instead of a generic copy that could corrupt/truncate output.
+- **Canvas NULL-guard** — Restored the NULL-`ovi` guard in `obs_canvas_reset_video_internal`.
+- **Windows mitigation relaxed** — No longer forces image relocation (`EnableForceRelocateImages`/`DisallowStrippedImages`), which could block legitimate stripped plugin DLLs; bottom-up + high-entropy ASLR remain on.
+- **Frontend / cleanup** — Perf-CSV writer joins its worker on teardown (avoids `std::terminate` on abnormal exit); Stats label sizing order fixed; minor false-sharing padding and dead-code cleanups.
 
 ### Plugins & Tools
 
