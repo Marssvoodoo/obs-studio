@@ -11,6 +11,11 @@ add_library(OBS::libobs-winrt ALIAS libobs-winrt)
 
 target_sources(libobs-winrt PRIVATE winrt-capture.cpp winrt-capture.h winrt-dispatch.cpp winrt-dispatch.h)
 
+# MSVC 14.51+ promotes <experimental/coroutine> (pulled in transitively by C++/WinRT) from a
+# deprecation warning to a hard error (STL1011). Silence it until cppwinrt/upstream migrate to
+# the C++20 <coroutine> header. Non-functional shim; matches Microsoft's documented remedy.
+target_compile_definitions(libobs-winrt PRIVATE _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 target_precompile_headers(
   libobs-winrt
   PRIVATE
