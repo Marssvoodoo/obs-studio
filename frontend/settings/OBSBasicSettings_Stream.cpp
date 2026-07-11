@@ -329,6 +329,7 @@ void OBSBasicSettings::SaveStream1Settings()
 	} else {
 		main->SetBroadcastFlowEnabled(false);
 	}
+	Auth::Save();
 
 	SaveCheckBox(ui->ignoreRecommended, "Stream1", "IgnoreRecommended");
 
