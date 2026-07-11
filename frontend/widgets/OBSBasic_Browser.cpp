@@ -25,6 +25,7 @@
 #include <qt-wrappers.hpp>
 
 #include <QDir>
+#include <QUrl>
 
 using namespace json11;
 #endif
@@ -157,6 +158,145 @@ void OBSBasic::AddExtraBrowserDock(const QString &title, const QString &url, con
 		dock->move(curPos);
 		dock->setVisible(true);
 	}
+}
+
+void OBSBasic::SyncRestreamBrowserDocks(bool forceRemove, bool layoutRestorePending)
+{
+#ifndef RESTREAM_ENABLED
+	static constexpr const char *restreamChatDockName = "restreamChat";
+	static constexpr const char *restreamInfoDockName = "restreamInfo";
+	static constexpr const char *restreamChannelDockName = "restreamChannel";
+	static constexpr const char *fallbackDockProperty = "restreamFallbackDock";
+	static constexpr const char *fallbackInitialized = "RestreamFallbackDocksInitialized";
+
+	auto findFallbackDock = [this](const char *objectName) {
+		QDockWidget *dock = findChild<QDockWidget *>(QString::fromUtf8(objectName));
+		return dock && dock->property(fallbackDockProperty).toBool() ? dock : nullptr;
+	};
+	auto removeFallbackDock = [this, &findFallbackDock](const char *objectName) {
+		if (findFallbackDock(objectName))
+			RemoveDockWidget(QString::fromUtf8(objectName));
+	};
+	const bool fallbackDocksPresent = findFallbackDock(restreamChatDockName) ||
+					  findFallbackDock(restreamInfoDockName) ||
+					  findFallbackDock(restreamChannelDockName);
+
+	QString service;
+	if (obs_service_t *selectedService = GetService()) {
+		OBSDataAutoRelease settings = obs_service_get_settings(selectedService);
+		service = QString::fromUtf8(obs_data_get_string(settings, "service"));
+	}
+
+	const bool restreamSelected = service == QStringLiteral("Restream.io") ||
+				      service == QStringLiteral("Restream.io - RTMP") ||
+				      service == QStringLiteral("Restream.io - FTL");
+
+	if (forceRemove && fallbackDocksPresent && restreamBrowserDockState.isEmpty())
+		restreamBrowserDockState = saveState();
+
+	if (forceRemove || !restreamSelected) {
+		removeFallbackDock(restreamChatDockName);
+		removeFallbackDock(restreamInfoDockName);
+		removeFallbackDock(restreamChannelDockName);
+		if (!restreamSelected)
+			restreamBrowserDockState.clear();
+		return;
+	}
+
+	if (!cef)
+		return;
+
+	InitBrowserPanelSafeBlock();
+	if (!panel_cookies)
+		return;
+
+	const QSize mainSize = frameSize();
+	const QPoint mainPos = pos();
+	auto addRestreamDock = [this, &findFallbackDock](const char *title, const char *objectName, const char *url,
+							 const QSize &size, const QSize &minimumSize,
+							 Qt::DockWidgetArea area, const QPoint &position) {
+		const QString dockObjectName = QString::fromUtf8(objectName);
+		if (findFallbackDock(objectName))
+			return true;
+		if (findChild<QDockWidget *>(dockObjectName))
+			return false;
+		if (IsDockObjectNameUsed(dockObjectName))
+			return false;
+
+		BrowserDock *dock = new BrowserDock(QTStr(title));
+		dock->setProperty(fallbackDockProperty, true);
+		dock->setObjectName(dockObjectName);
+		dock->resize(size);
+		dock->setMinimumSize(minimumSize);
+		dock->setWindowTitle(QTStr(title));
+		dock->setAllowedAreas(Qt::AllDockWidgetAreas);
+		QCefWidget *browser = cef->create_widget(dock, url, panel_cookies);
+		if (!browser) {
+			delete dock;
+			return false;
+		}
+		dock->SetWidget(browser);
+
+		AddDockWidget(dock, area);
+		dock->setFloating(true);
+		dock->move(position);
+		dock->setVisible(true);
+		return true;
+	};
+
+	const bool chatReady = addRestreamDock("Auth.Chat", restreamChatDockName,
+					       "https://restream.io/chat-application", QSize(420, 600), QSize(200, 300),
+					       Qt::RightDockWidgetArea,
+					       QPoint(mainPos.x() + mainSize.width() - 450, mainPos.y() + 60));
+	const bool infoReady = addRestreamDock("Auth.StreamInfo", restreamInfoDockName,
+					       "https://restream.io/titles/embed", QSize(410, 600), QSize(200, 150),
+					       Qt::LeftDockWidgetArea, QPoint(mainPos.x() + 20, mainPos.y() + 60));
+	const bool channelReady = addRestreamDock("RestreamAuth.Channels", restreamChannelDockName,
+						  "https://restream.io/channel/embed", QSize(410, 600), QSize(410, 300),
+						  Qt::LeftDockWidgetArea, QPoint(mainPos.x() + 440, mainPos.y() + 60));
+
+	if (chatReady) {
+		bool removedManualChat = false;
+		const qsizetype extraBrowserCount = qMin(
+			extraBrowserDocks.size(), qMin(extraBrowserDockNames.size(), extraBrowserDockTargets.size()));
+		for (qsizetype i = extraBrowserCount; i > 0; --i) {
+			const qsizetype index = i - 1;
+			const QUrl url(extraBrowserDockTargets.at(index));
+			if (url.scheme() != QStringLiteral("https") ||
+			    url.host().compare(QStringLiteral("chat.restream.io"), Qt::CaseInsensitive) != 0)
+				continue;
+
+			removeDockWidget(extraBrowserDocks.at(index).get());
+			extraBrowserDockTargets.removeAt(index);
+			extraBrowserDockNames.removeAt(index);
+			extraBrowserDocks.removeAt(index);
+			removedManualChat = true;
+		}
+
+		if (extraBrowserDocks.empty() && !extraBrowserMenuDocksSeparator.isNull()) {
+			ui->menuDocks->removeAction(extraBrowserMenuDocksSeparator);
+			extraBrowserMenuDocksSeparator->deleteLater();
+			extraBrowserMenuDocksSeparator.clear();
+		}
+		if (removedManualChat)
+			SaveExtraBrowserDocks();
+	}
+
+	if (chatReady && infoReady && channelReady && !restreamBrowserDockState.isEmpty() &&
+	    restoreState(restreamBrowserDockState))
+		restreamBrowserDockState.clear();
+
+	if (!layoutRestorePending && chatReady && infoReady && channelReady &&
+	    !config_get_bool(App()->GetUserConfig(), "BasicWindow", fallbackInitialized)) {
+		findFallbackDock(restreamChatDockName)->setVisible(true);
+		findFallbackDock(restreamInfoDockName)->setVisible(true);
+		findFallbackDock(restreamChannelDockName)->setVisible(true);
+		config_set_string(App()->GetUserConfig(), "BasicWindow", "DockState",
+				  saveState().toBase64().constData());
+		config_set_bool(App()->GetUserConfig(), "BasicWindow", fallbackInitialized, true);
+		config_save_safe(App()->GetUserConfig(), "tmp", nullptr);
+	}
+#endif
 }
 #endif
 

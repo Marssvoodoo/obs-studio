@@ -677,6 +677,9 @@ void OBSBasic::ActivateProfile(const OBSProfile &profile, bool reset)
 
 		if (reset) {
 			auth.reset();
+#ifdef BROWSER_AVAILABLE
+			SyncRestreamBrowserDocks(true);
+#endif
 			DestroyPanelCookieManager();
 #ifdef YOUTUBE_ENABLED
 			if (youtubeAppDock) {
@@ -701,6 +704,9 @@ void OBSBasic::ActivateProfile(const OBSProfile &profile, bool reset)
 	if (reset) {
 		UpdateProfileEncoders();
 		ResetProfileData();
+#ifdef BROWSER_AVAILABLE
+		SyncRestreamBrowserDocks();
+#endif
 	}
 
 	RefreshProfiles();

@@ -1560,6 +1560,7 @@ void OBSBasic::OBSInit()
 		ui->menuDocks->insertSeparator(ui->scenesDock->toggleViewAction());
 
 		LoadExtraBrowserDocks();
+		SyncRestreamBrowserDocks(false, true);
 	}
 #endif
 
@@ -1578,6 +1579,11 @@ void OBSBasic::OBSInit()
 		if (!restoreState(dockState))
 			on_resetDocks_triggered(true);
 	}
+
+#ifdef BROWSER_AVAILABLE
+	if (cef)
+		SyncRestreamBrowserDocks();
+#endif
 
 	bool pre23Defaults = config_get_bool(App()->GetUserConfig(), "General", "Pre23Defaults");
 	if (pre23Defaults) {

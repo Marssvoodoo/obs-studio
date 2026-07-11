@@ -322,6 +322,9 @@ void OBSBasicSettings::SaveStream1Settings()
 
 	main->SetService(newService);
 	main->SaveService();
+#ifdef BROWSER_AVAILABLE
+	main->SyncRestreamBrowserDocks();
+#endif
 	main->auth = auth;
 	if (!!main->auth) {
 		main->auth->LoadUI();

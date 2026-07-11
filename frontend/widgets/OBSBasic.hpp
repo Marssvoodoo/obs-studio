@@ -356,6 +356,7 @@ private:
 	QList<std::shared_ptr<QDockWidget>> extraBrowserDocks;
 	QStringList extraBrowserDockNames;
 	QStringList extraBrowserDockTargets;
+	QByteArray restreamBrowserDockState;
 
 	void ClearExtraBrowserDocks();
 	void LoadExtraBrowserDocks();
@@ -365,6 +366,9 @@ private:
 #endif
 
 public:
+#ifdef BROWSER_AVAILABLE
+	void SyncRestreamBrowserDocks(bool forceRemove = false, bool layoutRestorePending = false);
+#endif
 	static void InitBrowserPanelSafeBlock();
 
 	/* -------------------------------------
