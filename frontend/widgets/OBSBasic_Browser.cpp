@@ -163,6 +163,9 @@ void OBSBasic::AddExtraBrowserDock(const QString &title, const QString &url, con
 void OBSBasic::SyncRestreamBrowserDocks(bool forceRemove, bool layoutRestorePending)
 {
 #ifndef RESTREAM_ENABLED
+	if (isClosing() && !forceRemove)
+		return;
+
 	static constexpr const char *restreamChatDockName = "restreamChat";
 	static constexpr const char *restreamInfoDockName = "restreamInfo";
 	static constexpr const char *restreamChannelDockName = "restreamChannel";

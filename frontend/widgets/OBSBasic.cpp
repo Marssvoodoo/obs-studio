@@ -1741,12 +1741,7 @@ void OBSBasic::OnFirstLoad()
 		on_actionViewCurrentLog_triggered();
 }
 
-OBSBasic::~OBSBasic()
-{
-	if (!isClosing()) {
-		closeWindow();
-	}
-}
+OBSBasic::~OBSBasic() {}
 
 void OBSBasic::applicationShutdown() noexcept
 {
@@ -2336,6 +2331,10 @@ void OBSBasic::closeWindow()
 	delete extraBrowsers;
 
 	saveAll();
+
+#ifdef BROWSER_AVAILABLE
+	SyncRestreamBrowserDocks(true);
+#endif
 
 	auth.reset();
 
