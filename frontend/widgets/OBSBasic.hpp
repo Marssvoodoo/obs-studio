@@ -470,6 +470,8 @@ public:
 
 private slots:
 	void on_resetDocks_triggered(bool force = false);
+	void on_applyStandardDockLayout_triggered();
+	void on_applyBalancedDockLayout_triggered();
 	void on_lockDocks_toggled(bool lock);
 	void on_sideDocks_toggled(bool side);
 

@@ -18,6 +18,7 @@
 #include "AudioMixer.hpp"
 
 #include <components/MenuCheckBox.hpp>
+#include <components/ProgramAudioStrip.hpp>
 #include <dialogs/NameDialog.hpp>
 #include <utility/item-widget-helpers.hpp>
 #include <widgets/OBSBasic.hpp>
@@ -82,6 +83,7 @@ AudioMixer::AudioMixer(QWidget *parent) : QFrame(parent)
 	keepInactiveLast = config_get_bool(App()->GetUserConfig(), "BasicWindow", "MixerKeepInactiveLast");
 	showHidden = config_get_bool(App()->GetUserConfig(), "BasicWindow", "MixerShowHidden");
 	keepHiddenLast = config_get_bool(App()->GetUserConfig(), "BasicWindow", "MixerKeepHiddenLast");
+	showProgramAudio = config_get_bool(App()->GetUserConfig(), "BasicWindow", "MixerShowProgramAudio");
 
 	mainLayout = new QVBoxLayout(this);
 	mainLayout->setContentsMargins(0, 0, 0, 0);
@@ -138,11 +140,16 @@ AudioMixer::AudioMixer(QWidget *parent) : QFrame(parent)
 	stackedMixerArea->addWidget(hMixerScrollArea);
 	stackedMixerArea->addWidget(vMixerScrollArea);
 
+	programAudioStrip = new ProgramAudioStrip(this);
+	programAudioStrip->setVisible(showProgramAudio);
+	programAudioStrip->setContextMenuPolicy(Qt::ContextMenuPolicy::CustomContextMenu);
+
 	mixerToolbar = new QToolBar(this);
 	mixerToolbar->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
 	mixerToolbar->setIconSize(QSize(16, 16));
 	mixerToolbar->setFloatable(false);
 
+	mainLayout->addWidget(programAudioStrip);
 	mainLayout->addWidget(stackedMixerArea);
 	mainLayout->addWidget(mixerToolbar);
 
@@ -225,6 +232,7 @@ AudioMixer::AudioMixer(QWidget *parent) : QFrame(parent)
 
 	connect(vMixerScrollArea, &QScrollArea::customContextMenuRequested, this,
 		&AudioMixer::mixerContextMenuRequested);
+	connect(programAudioStrip, &QWidget::customContextMenuRequested, this, &AudioMixer::mixerContextMenuRequested);
 
 	connect(&updateTimer, &QTimer::timeout, this, &AudioMixer::updateVolumeLayouts);
 	updateTimer.setSingleShot(true);
@@ -245,6 +253,8 @@ AudioMixer::AudioMixer(QWidget *parent) : QFrame(parent)
 					updateKeepHiddenLast();
 				} else if (category == "BasicWindow" && name == "ShowListboxToolbars") {
 					updateShowToolbar();
+				} else if (category == "BasicWindow" && name == "MixerShowProgramAudio") {
+					updateShowProgramAudio();
 				} else if (category == "Accessibility" && name == "SettingsChanged") {
 					refreshVolumeColors();
 				}
@@ -268,6 +278,7 @@ AudioMixer::AudioMixer(QWidget *parent) : QFrame(parent)
 
 AudioMixer::~AudioMixer()
 {
+	programAudioStrip->shutdown();
 	signalHandlers.clear();
 
 	previewSources.clear();
@@ -320,6 +331,14 @@ void AudioMixer::toggleKeepHiddenLast(bool checked)
 	if (main) {
 		emit main->userSettingChanged("BasicWindow", "MixerKeepHiddenLast");
 	}
+}
+
+void AudioMixer::toggleShowProgramAudio(bool checked)
+{
+	config_set_bool(App()->GetUserConfig(), "BasicWindow", "MixerShowProgramAudio", checked);
+	OBSBasic *main = OBSBasic::Get();
+	if (main)
+		emit main->userSettingChanged("BasicWindow", "MixerShowProgramAudio");
 }
 
 VolumeControl *AudioMixer::createVolumeControl(obs_source_t *source)
@@ -593,6 +612,7 @@ void AudioMixer::clearVolumeControls()
 
 void AudioMixer::refreshVolumeColors()
 {
+	programAudioStrip->refreshColors();
 	for (const auto &[uuid, control] : volumeList) {
 		control->refreshColors();
 	}
@@ -814,6 +834,12 @@ void AudioMixer::createMixerContextMenu()
 	showInactiveCheckBox->setChecked(showInactive);
 	showInactiveAction->setDefaultWidget(showInactiveCheckBox);
 
+	QWidgetAction *showProgramAudioAction = new QWidgetAction(mixerMenu);
+	showProgramAudioCheckBox = new MenuCheckBox(QTStr("Basic.AudioMixer.ProgramAudio.Show"), mixerMenu);
+	showProgramAudioCheckBox->setAction(showProgramAudioAction);
+	showProgramAudioCheckBox->setChecked(showProgramAudio);
+	showProgramAudioAction->setDefaultWidget(showProgramAudioCheckBox);
+
 	QWidgetAction *hiddenLastAction = new QWidgetAction(mixerMenu);
 	const char *hiddenLastString = mixerVertical ? "Basic.AudioMixer.KeepHiddenRight"
 						     : "Basic.AudioMixer.KeepHiddenBottom";
@@ -844,6 +870,8 @@ void AudioMixer::createMixerContextMenu()
 	connect(hiddenLastCheckBox, &QCheckBox::toggled, this, &AudioMixer::toggleKeepHiddenLast, Qt::DirectConnection);
 
 	connect(showInactiveCheckBox, &QCheckBox::toggled, this, &AudioMixer::toggleShowInactive, Qt::DirectConnection);
+	connect(showProgramAudioCheckBox, &QCheckBox::toggled, this, &AudioMixer::toggleShowProgramAudio,
+		Qt::DirectConnection);
 	connect(inactiveLastCheckBox, &QCheckBox::toggled, this, &AudioMixer::toggleKeepInactiveLast,
 		Qt::DirectConnection);
 
@@ -857,6 +885,7 @@ void AudioMixer::createMixerContextMenu()
 	mixerMenu->addSeparator();
 	mixerMenu->addAction(showHiddenAction);
 	mixerMenu->addAction(showInactiveAction);
+	mixerMenu->addAction(showProgramAudioAction);
 	mixerMenu->addAction(hiddenLastAction);
 	mixerMenu->addAction(inactiveLastAction);
 	mixerMenu->addSeparator();
@@ -917,6 +946,7 @@ void AudioMixer::handleFrontendEvent(obs_frontend_event event)
 		queueLayoutUpdate();
 		break;
 	case OBS_FRONTEND_EVENT_EXIT:
+		programAudioStrip->shutdown();
 		obs_frontend_remove_event_callback(AudioMixer::onFrontendEvent, this);
 		break;
 	default:
@@ -1008,6 +1038,19 @@ void AudioMixer::updateShowToolbar()
 	showToolbar = settingShowToolbar;
 
 	showToolbar ? mixerToolbar->show() : mixerToolbar->hide();
+}
+
+void AudioMixer::updateShowProgramAudio()
+{
+	const bool settingShowProgramAudio =
+		config_get_bool(App()->GetUserConfig(), "BasicWindow", "MixerShowProgramAudio");
+	if (showProgramAudio == settingShowProgramAudio)
+		return;
+
+	showProgramAudio = settingShowProgramAudio;
+	programAudioStrip->setVisible(showProgramAudio);
+	if (showProgramAudioCheckBox)
+		showProgramAudioCheckBox->setChecked(showProgramAudio);
 }
 
 void AudioMixer::obsSourceActivated(void *data, calldata_t *params)

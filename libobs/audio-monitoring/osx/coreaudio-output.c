@@ -14,6 +14,8 @@
 
 struct audio_monitor {
 	obs_source_t *source;
+	size_t mix_idx;
+	bool output_mix;
 	AudioQueueRef queue;
 	AudioQueueBufferRef buffers[3];
 
@@ -61,17 +63,15 @@ static void on_audio_pause(void *data, calldata_t *calldata)
 	pthread_mutex_unlock(&monitor->mutex);
 }
 
-static void on_audio_playback(void *param, obs_source_t *source, const struct audio_data *audio_data, bool muted)
+static void play_audio(struct audio_monitor *monitor, const struct audio_data *audio_data, float vol, bool muted)
 {
-	struct audio_monitor *monitor = param;
-	float vol = source->user_volume;
 	uint32_t bytes;
 
 	if (!os_atomic_load_bool(&monitor->active)) {
 		return;
 	}
 
-	if (os_atomic_load_long(&source->activate_refs) == 0) {
+	if (monitor->source && os_atomic_load_long(&monitor->source->activate_refs) == 0) {
 		return;
 	}
 
@@ -122,6 +122,17 @@ static void on_audio_playback(void *param, obs_source_t *source, const struct au
 	pthread_mutex_unlock(&monitor->mutex);
 }
 
+static void on_audio_playback(void *param, obs_source_t *source, const struct audio_data *audio_data, bool muted)
+{
+	play_audio(param, audio_data, source->user_volume, muted);
+}
+
+static void on_audio_output(void *param, size_t mix_idx, struct audio_data *audio_data)
+{
+	UNUSED_PARAMETER(mix_idx);
+	play_audio(param, audio_data, 1.0f, false);
+}
+
 static void buffer_audio(void *data, AudioQueueRef aq, AudioQueueBufferRef buf)
 {
 	struct audio_monitor *monitor = data;
@@ -145,7 +156,7 @@ static void buffer_audio(void *data, AudioQueueRef aq, AudioQueueBufferRef buf)
 
 extern bool devices_match(const char *id1, const char *id2);
 
-static bool audio_monitor_init(struct audio_monitor *monitor, obs_source_t *source)
+static bool audio_monitor_init(struct audio_monitor *monitor, obs_source_t *source, size_t mix_idx, bool output_mix)
 {
 	const struct audio_output_info *info = audio_output_get_info(obs->audio.audio);
 	uint32_t channels = get_audio_channels(info->speakers);
@@ -161,6 +172,8 @@ static bool audio_monitor_init(struct audio_monitor *monitor, obs_source_t *sour
 					    .mBitsPerChannel = sizeof(float) * 8};
 
 	monitor->source = source;
+	monitor->mix_idx = mix_idx;
+	monitor->output_mix = output_mix;
 
 	monitor->channels = channels;
 	monitor->buffer_size = channels * sizeof(float) * info->samples_per_sec / 100 * 3;
@@ -173,7 +186,7 @@ static bool audio_monitor_init(struct audio_monitor *monitor, obs_source_t *sour
 		return false;
 	}
 
-	if (source->info.output_flags & OBS_SOURCE_DO_NOT_SELF_MONITOR) {
+	if (source && (source->info.output_flags & OBS_SOURCE_DO_NOT_SELF_MONITOR)) {
 		obs_data_t *s = obs_source_get_settings(source);
 		const char *s_dev_id = obs_data_get_string(s, "device_id");
 		bool match = devices_match(s_dev_id, uid);
@@ -246,7 +259,9 @@ static bool audio_monitor_init(struct audio_monitor *monitor, obs_source_t *sour
 
 static void audio_monitor_free(struct audio_monitor *monitor)
 {
-	if (monitor->source) {
+	if (monitor->output_mix) {
+		obs_remove_raw_audio_callback(monitor->mix_idx, on_audio_output, monitor);
+	} else if (monitor->source) {
 		obs_source_remove_audio_capture_callback(monitor->source, on_audio_playback, monitor);
 		obs_source_remove_audio_pause_callback(monitor->source, on_audio_pause, monitor);
 	}
@@ -273,17 +288,41 @@ static void audio_monitor_init_final(struct audio_monitor *monitor)
 	if (monitor->ignore)
 		return;
 
-	obs_source_add_audio_capture_callback(monitor->source, on_audio_playback, monitor);
-	obs_source_add_audio_pause_callback(monitor->source, on_audio_pause, monitor);
+	if (monitor->output_mix) {
+		obs_add_raw_audio_callback(monitor->mix_idx, NULL, on_audio_output, monitor);
+	} else {
+		obs_source_add_audio_capture_callback(monitor->source, on_audio_playback, monitor);
+		obs_source_add_audio_pause_callback(monitor->source, on_audio_pause, monitor);
+	}
 }
 
 struct audio_monitor *audio_monitor_create(obs_source_t *source)
 {
 	struct audio_monitor *monitor = bzalloc(sizeof(*monitor));
 
-	if (!audio_monitor_init(monitor, source)) {
+	if (!audio_monitor_init(monitor, source, 0, false)) {
 		goto fail;
 	}
+
+	pthread_mutex_lock(&obs->audio.monitoring_mutex);
+	da_push_back(obs->audio.monitors, &monitor);
+	pthread_mutex_unlock(&obs->audio.monitoring_mutex);
+
+	audio_monitor_init_final(monitor);
+	return monitor;
+
+fail:
+	audio_monitor_free(monitor);
+	bfree(monitor);
+	return NULL;
+}
+
+struct audio_monitor *audio_monitor_create_output(size_t mix_idx)
+{
+	struct audio_monitor *monitor = bzalloc(sizeof(*monitor));
+
+	if (mix_idx >= MAX_AUDIO_MIXES || !audio_monitor_init(monitor, NULL, mix_idx, true))
+		goto fail;
 
 	pthread_mutex_lock(&obs->audio.monitoring_mutex);
 	da_push_back(obs->audio.monitors, &monitor);
@@ -303,10 +342,12 @@ void audio_monitor_reset(struct audio_monitor *monitor)
 	bool success;
 
 	obs_source_t *source = monitor->source;
+	size_t mix_idx = monitor->mix_idx;
+	bool output_mix = monitor->output_mix;
 	audio_monitor_free(monitor);
 	memset(monitor, 0, sizeof(*monitor));
 
-	success = audio_monitor_init(monitor, source);
+	success = audio_monitor_init(monitor, source, mix_idx, output_mix);
 	if (success)
 		audio_monitor_init_final(monitor);
 }

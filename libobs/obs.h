@@ -885,6 +885,15 @@ EXPORT void obs_enum_audio_monitoring_devices(obs_enum_audio_device_cb cb, void 
 EXPORT bool obs_set_audio_monitoring_device(const char *name, const char *id);
 EXPORT void obs_get_audio_monitoring_device(const char **name, const char **id);
 
+/**
+ * Routes one final output mix to the configured monitoring device.  Pass -1
+ * to disable output-bus monitoring.  Source monitoring remains independent.
+ */
+EXPORT bool obs_set_audio_monitoring_mix(int mix_idx);
+
+/** Returns the monitored output mix, or -1 when disabled. */
+EXPORT int obs_get_audio_monitoring_mix(void);
+
 EXPORT void obs_add_tick_callback(void (*tick)(void *param, float seconds), void *param);
 EXPORT void obs_remove_tick_callback(void (*tick)(void *param, float seconds), void *param);
 
@@ -1253,6 +1262,15 @@ EXPORT void obs_source_set_audio_mixers(obs_source_t *source, uint32_t mixers);
 
 /** Gets audio mixer flags */
 EXPORT uint32_t obs_source_get_audio_mixers(const obs_source_t *source);
+
+/**
+ * Sets the linear send gain for one audio mix.  A gain of 1.0 is 0 dB;
+ * 0.0 silences the send without changing its mixer routing flag.
+ */
+EXPORT void obs_source_set_audio_mix_level(obs_source_t *source, size_t mixer_idx, float level);
+
+/** Gets the linear send gain for one audio mix. */
+EXPORT float obs_source_get_audio_mix_level(const obs_source_t *source, size_t mixer_idx);
 
 /**
  * Increments the 'showing' reference counter to indicate that the source is

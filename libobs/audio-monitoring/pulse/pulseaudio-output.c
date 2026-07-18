@@ -6,6 +6,8 @@
 
 struct audio_monitor {
 	obs_source_t *source;
+	size_t mix_idx;
+	bool output_mix;
 	pa_stream *stream;
 	char *device;
 	pa_buffer_attr attr;
@@ -227,10 +229,8 @@ finish:
 	pulseaudio_unlock();
 }
 
-static void on_audio_playback(void *param, obs_source_t *source, const struct audio_data *audio_data, bool muted)
+static void play_audio(struct audio_monitor *monitor, const struct audio_data *audio_data, float vol, bool muted)
 {
-	struct audio_monitor *monitor = param;
-	float vol = source->user_volume;
 	size_t bytes;
 
 	uint8_t *resample_data[MAX_AV_PLANES];
@@ -241,7 +241,7 @@ static void on_audio_playback(void *param, obs_source_t *source, const struct au
 	if (pthread_mutex_trylock(&monitor->playback_mutex) != 0)
 		return;
 
-	if (os_atomic_load_long(&source->activate_refs) == 0)
+	if (monitor->source && os_atomic_load_long(&monitor->source->activate_refs) == 0)
 		goto unlock;
 
 	success = audio_resampler_resample(monitor->resampler, resample_data, &resample_frames, &ts_offset,
@@ -266,7 +266,18 @@ static void on_audio_playback(void *param, obs_source_t *source, const struct au
 
 unlock:
 	pthread_mutex_unlock(&monitor->playback_mutex);
-	do_stream_write(param);
+	do_stream_write(monitor);
+}
+
+static void on_audio_playback(void *param, obs_source_t *source, const struct audio_data *audio_data, bool muted)
+{
+	play_audio(param, audio_data, source->user_volume, muted);
+}
+
+static void on_audio_output(void *param, size_t mix_idx, struct audio_data *audio_data)
+{
+	UNUSED_PARAMETER(mix_idx);
+	play_audio(param, audio_data, 1.0f, false);
 }
 
 static void pulseaudio_server_info(pa_context *c, const pa_server_info *i, void *userdata)
@@ -348,17 +359,19 @@ static void pulseaudio_stop_playback(struct audio_monitor *monitor)
 	monitor->frames = 0;
 }
 
-static bool audio_monitor_init(struct audio_monitor *monitor, obs_source_t *source)
+static bool audio_monitor_init(struct audio_monitor *monitor, obs_source_t *source, size_t mix_idx, bool output_mix)
 {
 	pthread_mutex_init_value(&monitor->playback_mutex);
 
 	monitor->source = source;
+	monitor->mix_idx = mix_idx;
+	monitor->output_mix = output_mix;
 
 	const char *id = obs->audio.monitoring_device_id;
 	if (!id)
 		return false;
 
-	if (source->info.output_flags & OBS_SOURCE_DO_NOT_SELF_MONITOR) {
+	if (source && (source->info.output_flags & OBS_SOURCE_DO_NOT_SELF_MONITOR)) {
 		obs_data_t *s = obs_source_get_settings(source);
 		const char *s_dev_id = obs_data_get_string(s, "device_id");
 		bool match = devices_match(s_dev_id, id);
@@ -425,7 +438,8 @@ static bool audio_monitor_init(struct audio_monitor *monitor, obs_source_t *sour
 
 	pa_channel_map channel_map = pulseaudio_channel_map(monitor->speakers);
 
-	monitor->stream = pulseaudio_stream_new(obs_source_get_name(monitor->source), &spec, &channel_map);
+	monitor->stream = pulseaudio_stream_new(output_mix ? "OBS Output Bus" : obs_source_get_name(monitor->source),
+						&spec, &channel_map);
 	if (!monitor->stream) {
 		blog(LOG_ERROR, "Unable to create stream");
 		return false;
@@ -455,7 +469,10 @@ static void audio_monitor_init_final(struct audio_monitor *monitor)
 	if (monitor->ignore)
 		return;
 
-	obs_source_add_audio_capture_callback(monitor->source, on_audio_playback, monitor);
+	if (monitor->output_mix)
+		obs_add_raw_audio_callback(monitor->mix_idx, NULL, on_audio_output, monitor);
+	else
+		obs_source_add_audio_capture_callback(monitor->source, on_audio_playback, monitor);
 }
 
 static inline void audio_monitor_free(struct audio_monitor *monitor)
@@ -463,7 +480,9 @@ static inline void audio_monitor_free(struct audio_monitor *monitor)
 	if (monitor->ignore)
 		return;
 
-	if (monitor->source)
+	if (monitor->output_mix)
+		obs_remove_raw_audio_callback(monitor->mix_idx, on_audio_output, monitor);
+	else if (monitor->source)
 		obs_source_remove_audio_capture_callback(monitor->source, on_audio_playback, monitor);
 
 	audio_resampler_destroy(monitor->resampler);
@@ -481,7 +500,29 @@ struct audio_monitor *audio_monitor_create(obs_source_t *source)
 	struct audio_monitor monitor = {0};
 	struct audio_monitor *out;
 
-	if (!audio_monitor_init(&monitor, source))
+	if (!audio_monitor_init(&monitor, source, 0, false))
+		goto fail;
+
+	out = bmemdup(&monitor, sizeof(monitor));
+
+	pthread_mutex_lock(&obs->audio.monitoring_mutex);
+	da_push_back(obs->audio.monitors, &out);
+	pthread_mutex_unlock(&obs->audio.monitoring_mutex);
+
+	audio_monitor_init_final(out);
+	return out;
+
+fail:
+	audio_monitor_free(&monitor);
+	return NULL;
+}
+
+struct audio_monitor *audio_monitor_create_output(size_t mix_idx)
+{
+	struct audio_monitor monitor = {0};
+	struct audio_monitor *out;
+
+	if (mix_idx >= MAX_AUDIO_MIXES || !audio_monitor_init(&monitor, NULL, mix_idx, true))
 		goto fail;
 
 	out = bmemdup(&monitor, sizeof(monitor));
@@ -502,11 +543,12 @@ void audio_monitor_reset(struct audio_monitor *monitor)
 {
 	struct audio_monitor new_monitor = {0};
 	bool success;
-	audio_monitor_free(monitor);
+	obs_source_t *source = monitor->source;
+	size_t mix_idx = monitor->mix_idx;
+	bool output_mix = monitor->output_mix;
 
-	pthread_mutex_lock(&monitor->playback_mutex);
-	success = audio_monitor_init(&new_monitor, monitor->source);
-	pthread_mutex_unlock(&monitor->playback_mutex);
+	audio_monitor_free(monitor);
+	success = audio_monitor_init(&new_monitor, source, mix_idx, output_mix);
 
 	if (success) {
 		*monitor = new_monitor;

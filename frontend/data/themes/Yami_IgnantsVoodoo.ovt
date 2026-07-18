@@ -1,5 +1,5 @@
 @OBSThemeMeta {
-    name: 'Ignants Voodoo';
+    name: 'Ignants Voodoo 2.0';
     id: 'com.marssvoodoo.IgnantsVoodoo';
     extends: 'com.obsproject.Yami';
     author: 'MarssVoodoo';
@@ -7,7 +7,15 @@
 }
 
 @OBSThemeVars {
-    /* Ignants.com palette */
+    /* Ignants red and charcoal palette. The theme ID stays stable so 2.0 is an
+     * in-place upgrade for existing installations. */
+    --blue1: #FF7B84;
+    --blue2: #FF3D4B;
+    --blue3: #E11D2A;
+    --blue4: #B01420;
+    --blue5: #870D17;
+    --blue6: #5A0910;
+
     --grey1: #6A5B5E;
     --grey2: #53464A;
     --grey3: #403438;
@@ -30,12 +38,32 @@
     --red5: #870D17;
     --red6: #5A0910;
 
+    --purple1: #D9A0AE;
+    --purple2: #BE7285;
+    --purple3: #93485B;
+    --purple4: #713344;
+    --purple5: #512432;
+    --purple6: #351820;
+
     --green1: #72D39B;
     --green2: #3FB873;
     --green3: #2F925A;
+    --green4: #247347;
+    --green5: #194E31;
+    --green6: #102F20;
+
     --yellow1: #FFD166;
     --yellow2: #F4B942;
     --yellow3: #C98B23;
+    --yellow4: #9C681B;
+    --yellow5: #6F4914;
+    --yellow6: #432D0F;
+
+    --black1: #050303;
+    --black2: #0B0807;
+    --black3: #241B1E;
+    --black4: #403438;
+    --black5: #6A5B5E;
 
     --bg_window: #0B0807;
     --bg_base: #141012;
@@ -53,9 +81,12 @@
     --text: #FFFFFF;
     --text_light: #FFFFFF;
     --text_muted: #9AA0A6;
+    --text_disabled: #6A5B5E;
+    --text_inactive: #D9D9D9;
 
     --border_color: #302529;
     --highlight_color: #FF3D4B;
+    --separator_hover: #FF3D4B;
 
     --input_bg: #1B1517;
     --input_bg_hover: #241B1E;
@@ -71,6 +102,11 @@
     --button_border: #302529;
     --button_border_hover: #E11D2A;
     --button_border_focus: #FF3D4B;
+
+    --toolbutton_bg: #1B1517;
+    --toolbutton_bg_hover: #302529;
+    --toolbutton_bg_down: #5A0910;
+    --toolbutton_bg_disabled: #141012;
 
     --tab_bg: #141012;
     --tab_bg_hover: #302529;
@@ -88,9 +124,117 @@
     --scrollbar_border: #302529;
 }
 
+/* Voodoo 2.0 application chrome. State rules retain the base geometry and
+ * change only color so hover, focus, and live updates cannot move docks. */
+QMainWindow,
+QDialog,
+QStatusBar,
+QMenuBar,
+QMenu {
+    background-color: #0B0807;
+}
+
+QMenuBar {
+    border-bottom: 1px solid #302529;
+}
+
+QMenuBar::item:selected {
+    background-color: #5A0910;
+    color: #FFFFFF;
+}
+
+QMenu {
+    background-color: #141012;
+    border-color: #403438;
+}
+
+QMenu::item:selected,
+QListView::item:selected,
+QListWidget::item:selected {
+    background-color: #5A0910;
+    border-color: #B01420;
+    color: #FFFFFF;
+}
+
+QMenu::item:selected:hover,
+QListView::item:selected:hover,
+QListWidget::item:selected:hover {
+    background-color: #870D17;
+    border-color: #E11D2A;
+}
+
+QToolBar {
+    background-color: #141012;
+}
+
+QToolButton,
+QPushButton[toolButton="true"] {
+    background-color: #1B1517;
+    border-color: #302529;
+}
+
+QToolButton:hover,
+QPushButton[toolButton="true"]:hover,
+QToolButton:focus,
+QPushButton[toolButton="true"]:focus {
+    background-color: #302529;
+    border-color: #B01420;
+}
+
+QToolButton:pressed,
+QPushButton[toolButton="true"]:pressed {
+    background-color: #5A0910;
+    border-color: #E11D2A;
+}
+
+QTabBar::tab {
+    background-color: #141012;
+    border-color: #302529;
+}
+
+QTabBar::tab:hover {
+    background-color: #241B1E;
+    border-color: #870D17;
+}
+
+QTabBar::tab:selected {
+    background-color: #5A0910;
+    border-color: #E11D2A;
+    color: #FFFFFF;
+}
+
+QPushButton:focus,
+QComboBox:focus,
+QLineEdit:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus {
+    border-color: #FF3D4B;
+}
+
+QScrollBar::handle {
+    background-color: #403438;
+    border-color: #403438;
+}
+
+QScrollBar::handle:hover {
+    background-color: #870D17;
+    border-color: #E11D2A;
+}
+
+QScrollBar::handle:pressed {
+    background-color: #B01420;
+    border-color: #FF3D4B;
+}
+
+OBSDock > QWidget {
+    background-color: #141012;
+    border-color: #302529;
+}
+
 QDockWidget::title {
     background-color: #141012;
     border-bottom: 2px solid #B01420;
+    color: #FFFFFF;
 }
 
 QDockWidget#previewDock::title {
@@ -111,6 +255,135 @@ QToolTip {
     background-color: #1B1517;
     color: #FFFFFF;
     border: 1px solid #E11D2A;
+}
+
+/* DAW-inspired mixer surface. Every dynamic state preserves its border width,
+ * padding, and margin so metering cannot alter channel or dock geometry. */
+#stackedMixerArea,
+#hVolumeWidgets,
+#vVolumeWidgets {
+    background-color: #0B0807;
+}
+
+#hVolumeWidgets VolumeControl {
+    background-color: #141012;
+    border-bottom-color: #302529;
+}
+
+#vVolumeWidgets VolumeControl {
+    background-color: #141012;
+    border-right-color: #302529;
+}
+
+VolumeName {
+    background-color: #141012;
+    border-color: transparent;
+}
+
+VolumeName:hover,
+VolumeName:focus {
+    background-color: #241B1E;
+    border-color: #870D17;
+}
+
+VolumeName QLabel {
+    color: #F5F5F5;
+    font-weight: 700;
+}
+
+#stackedMixerArea VolumeControl QSlider::groove {
+    background-color: #0B0807;
+    border: 1px solid #302529;
+}
+
+#stackedMixerArea VolumeControl QSlider::handle {
+    background-color: #F5F5F5;
+    border: 1px solid #870D17;
+}
+
+#stackedMixerArea VolumeControl QSlider::handle:hover {
+    background-color: #FFFFFF;
+    border-color: #FF3D4B;
+}
+
+#stackedMixerArea VolumeControl QSlider::handle:pressed {
+    background-color: #D9D9D9;
+    border-color: #E11D2A;
+}
+
+VolumeControl #volLabel {
+    background-color: #0B0807;
+    border: 1px solid #302529;
+    border-radius: 3px;
+    color: #B8B8B8;
+}
+
+VolumeControl .mixer-category {
+    background-color: #241B1E;
+    color: #D9D9D9;
+    border-color: #403438;
+}
+
+VolumeControl.volume-pinned .mixer-category {
+    background-color: #5A0910;
+    color: #FFFFFF;
+}
+
+VolumeControl.volume-hidden .mixer-category {
+    background-color: #351820;
+    color: #D9A0AE;
+}
+
+VolumeControl.volume-unassigned .mixer-category {
+    background-color: #432D0F;
+    color: #FFD166;
+}
+
+VolumeControl.volume-inactive .mixer-category {
+    background-color: #0B0807;
+    color: #9AA0A6;
+}
+
+VolumeControl.volume-preview .mixer-category {
+    background-color: #102F20;
+    color: #72D39B;
+}
+
+.btn-mute,
+.btn-monitor {
+    border-color: transparent;
+}
+
+.btn-mute:hover,
+.btn-monitor:hover {
+    background-color: #241B1E;
+    border-color: #403438;
+}
+
+.btn-mute.checked,
+.btn-mute:checked {
+    background-color: #5A0910;
+    border-color: #E11D2A;
+    color: #FFFFFF;
+}
+
+.btn-monitor.checked,
+.btn-monitor:checked {
+    background-color: #102F20;
+    border-color: #3FB873;
+    color: #FFFFFF;
+}
+
+VolumeMeter {
+    qproperty-backgroundNominalColor: #102F20;
+    qproperty-backgroundWarningColor: #432D0F;
+    qproperty-backgroundErrorColor: #5A0910;
+    qproperty-foregroundNominalColor: #3FB873;
+    qproperty-foregroundWarningColor: #F4B942;
+    qproperty-foregroundErrorColor: #FF3D4B;
+    qproperty-magnitudeColor: #050303;
+    qproperty-majorTickColor: #B8B8B8;
+    qproperty-minorTickColor: #53464A;
 }
 
 QLabel#levelGuideLabel {
@@ -153,6 +426,127 @@ QLabel#levelGuideLabel[levelState="clip"] {
     border-color: #FF3D4B;
 }
 
+/* Program Audio is the console master strip for the configured stream mix. */
+QFrame#programAudioStrip {
+    background-color: #0B0807;
+    border-top: 1px solid #302529;
+    border-bottom: 2px solid #870D17;
+}
+
+QFrame#programAudioStrip[programState="live"] {
+    border-bottom-color: #3FB873;
+}
+
+QFrame#programAudioStrip[programState="recording"],
+QFrame#programAudioStrip[programState="live-recording"] {
+    border-bottom-color: #E11D2A;
+}
+
+QLabel#programAudioTitle {
+    color: #FFFFFF;
+    font-weight: 800;
+}
+
+QLabel#programAudioMixLabel {
+    background-color: #1B1517;
+    color: #D9D9D9;
+    border: 1px solid #403438;
+    border-radius: 3px;
+}
+
+VolumeMeter#programAudioMeter {
+    background-color: #050303;
+    qproperty-backgroundNominalColor: #102F20;
+    qproperty-backgroundWarningColor: #432D0F;
+    qproperty-backgroundErrorColor: #5A0910;
+    qproperty-foregroundNominalColor: #3FB873;
+    qproperty-foregroundWarningColor: #F4B942;
+    qproperty-foregroundErrorColor: #FF3D4B;
+    qproperty-magnitudeColor: #050303;
+    qproperty-majorTickColor: #B8B8B8;
+    qproperty-minorTickColor: #53464A;
+}
+
+QLabel#programAudioMomentaryLabel,
+QLabel#programAudioShortTermLabel,
+QLabel#programAudioIntegratedLabel,
+QLabel#programAudioTruePeakLabel,
+QLabel#programAudioStatusBadge {
+    background-color: #141012;
+    color: #9AA0A6;
+    border: 1px solid #403438;
+    border-radius: 3px;
+    font-weight: 700;
+}
+
+QLabel#programAudioIntegratedLabel {
+    color: #FFFFFF;
+    border-color: #870D17;
+}
+
+QLabel#programAudioTruePeakLabel[peakState="nominal"] {
+    background-color: #102F20;
+    color: #72D39B;
+    border-color: #3FB873;
+}
+
+QLabel#programAudioTruePeakLabel[peakState="warning"] {
+    background-color: #432D0F;
+    color: #FFD166;
+    border-color: #C98B23;
+}
+
+QLabel#programAudioTruePeakLabel[peakState="error"] {
+    background-color: #5A0910;
+    color: #FF7B84;
+    border-color: #E11D2A;
+}
+
+QLabel#programAudioTruePeakLabel[peakState="clip"] {
+    background-color: #E11D2A;
+    color: #FFFFFF;
+    border-color: #FF7B84;
+}
+
+QPushButton#programAudioResetButton {
+    min-height: 18px;
+    padding: 1px 7px;
+    background-color: #1B1517;
+    color: #D9D9D9;
+    border: 1px solid #53464A;
+    border-radius: 3px;
+    font-weight: 700;
+}
+
+QPushButton#programAudioResetButton:hover {
+    background-color: #302529;
+    color: #FFFFFF;
+    border-color: #870D17;
+}
+
+QPushButton#programAudioResetButton:pressed {
+    background-color: #870D17;
+    border-color: #E11D2A;
+}
+
+QLabel#programAudioStatusBadge[programState="live"] {
+    background-color: #102F20;
+    color: #72D39B;
+    border-color: #3FB873;
+}
+
+QLabel#programAudioStatusBadge[programState="recording"] {
+    background-color: #5A0910;
+    color: #FF7B84;
+    border-color: #E11D2A;
+}
+
+QLabel#programAudioStatusBadge[programState="live-recording"] {
+    background-color: #E11D2A;
+    color: #FFFFFF;
+    border-color: #FF7B84;
+}
+
 #streamButton:!hover:!pressed.state-active,
 #recordButton:!hover:!pressed.state-active,
 #pauseRecordButton:!hover:!pressed.state-active,
@@ -175,10 +569,39 @@ QLabel#levelGuideLabel[levelState="clip"] {
     border-color: #FF3D4B;
 }
 
-.list-grid SceneTree::item:selected {
-    background-color: #B01420;
+#streamButton:pressed.state-active,
+#recordButton:pressed.state-active,
+#pauseRecordButton:pressed.state-active,
+#replayBufferButton:pressed.state-active,
+#virtualCamButton:pressed.state-active,
+#modeSwitch:pressed.state-active,
+#broadcastButton:pressed.state-active {
+    background-color: #870D17;
+    border-color: #E11D2A;
 }
 
-.list-grid SceneTree::item:selected:hover {
+#controlsFrame {
+    background-color: #141012;
+}
+
+OBSBasicStatusBar {
+    background-color: #0B0807;
+    border-top-color: #302529;
+}
+
+StatusBarWidget > QFrame {
+    border-left-color: #302529;
+}
+
+.list-grid SceneTree::item:selected,
+SceneTree::item:selected,
+SourceTree::item:selected {
+    background-color: #B01420;
+    color: #FFFFFF;
+}
+
+.list-grid SceneTree::item:selected:hover,
+SceneTree::item:selected:hover,
+SourceTree::item:selected:hover {
     background-color: #E11D2A;
 }

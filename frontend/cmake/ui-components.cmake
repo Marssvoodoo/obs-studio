@@ -59,6 +59,8 @@ target_sources(
     components/OBSPreviewScalingLabel.hpp
     components/OBSSourceLabel.cpp
     components/OBSSourceLabel.hpp
+    components/ProgramAudioStrip.cpp
+    components/ProgramAudioStrip.hpp
     components/SceneTree.cpp
     components/SceneTree.hpp
     components/SilentUpdateCheckBox.hpp

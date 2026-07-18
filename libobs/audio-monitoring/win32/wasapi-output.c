@@ -10,8 +10,9 @@
 #define ACTUALLY_DEFINE_GUID(name, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8) \
 	EXTERN_C const GUID DECLSPEC_SELECTANY name = {l, w1, w2, {b1, b2, b3, b4, b5, b6, b7, b8}}
 
-#define do_log(level, format, ...) \
-	blog(level, "[audio monitoring: '%s'] " format, obs_source_get_name(monitor->source), ##__VA_ARGS__)
+#define do_log(level, format, ...)                                                                        \
+	blog(level, "[audio monitoring: '%s'] " format,                                                    \
+	     monitor->output_mix ? "output bus" : obs_source_get_name(monitor->source), ##__VA_ARGS__)
 
 #define warn(format, ...) do_log(LOG_WARNING, format, ##__VA_ARGS__)
 #define info(format, ...) do_log(LOG_INFO, format, ##__VA_ARGS__)
@@ -27,6 +28,8 @@ ACTUALLY_DEFINE_GUID(IID_IAudioRenderClient, 0xF294ACFC, 0x3146, 0x4483, 0xA7, 0
 
 struct audio_monitor {
 	obs_source_t *source;
+	size_t mix_idx;
+	bool output_mix;
 	IAudioClient *client;
 	IAudioRenderClient *render;
 
@@ -276,11 +279,9 @@ static void audio_monitor_free_for_reconnect(struct audio_monitor *monitor)
 	da_free(monitor->buf);
 }
 
-static void on_audio_playback(void *param, obs_source_t *source, const struct audio_data *audio_data, bool muted)
+static void play_audio(struct audio_monitor *monitor, const struct audio_data *audio_data, float vol, bool muted)
 {
-	struct audio_monitor *monitor = param;
 	uint8_t *resample_data[MAX_AV_PLANES];
-	float vol = source->user_volume;
 	uint32_t resample_frames;
 	uint64_t ts_offset;
 	bool success;
@@ -289,7 +290,7 @@ static void on_audio_playback(void *param, obs_source_t *source, const struct au
 	if (!TryAcquireSRWLockExclusive(&monitor->playback_mutex)) {
 		return;
 	}
-	if (os_atomic_load_long(&source->activate_refs) == 0) {
+	if (monitor->source && os_atomic_load_long(&monitor->source->activate_refs) == 0) {
 		goto unlock;
 	}
 
@@ -309,7 +310,7 @@ static void on_audio_playback(void *param, obs_source_t *source, const struct au
 		goto free_for_reconnect;
 	}
 
-	bool decouple_audio = source->async_unbuffered && source->async_decoupled;
+	bool decouple_audio = monitor->source && monitor->source->async_unbuffered && monitor->source->async_decoupled;
 
 	if (monitor->source_has_video && !decouple_audio) {
 		uint64_t ts = audio_data->timestamp - ts_offset;
@@ -350,12 +351,25 @@ unlock:
 	ReleaseSRWLockExclusive(&monitor->playback_mutex);
 }
 
+static void on_audio_playback(void *param, obs_source_t *source, const struct audio_data *audio_data, bool muted)
+{
+	play_audio(param, audio_data, source->user_volume, muted);
+}
+
+static void on_audio_output(void *param, size_t mix_idx, struct audio_data *audio_data)
+{
+	UNUSED_PARAMETER(mix_idx);
+	play_audio(param, audio_data, 1.0f, false);
+}
+
 static inline void audio_monitor_free(struct audio_monitor *monitor)
 {
 	if (monitor->ignore)
 		return;
 
-	if (monitor->source) {
+	if (monitor->output_mix) {
+		obs_remove_raw_audio_callback(monitor->mix_idx, on_audio_output, monitor);
+	} else if (monitor->source) {
 		obs_source_remove_audio_capture_callback(monitor->source, on_audio_playback, monitor);
 	}
 
@@ -371,9 +385,11 @@ static inline void audio_monitor_free(struct audio_monitor *monitor)
 
 extern bool devices_match(const char *id1, const char *id2);
 
-static bool audio_monitor_init(struct audio_monitor *monitor, obs_source_t *source)
+static bool audio_monitor_init(struct audio_monitor *monitor, obs_source_t *source, size_t mix_idx, bool output_mix)
 {
 	monitor->source = source;
+	monitor->mix_idx = mix_idx;
+	monitor->output_mix = output_mix;
 
 	const char *id = obs->audio.monitoring_device_id;
 	if (!id) {
@@ -381,7 +397,7 @@ static bool audio_monitor_init(struct audio_monitor *monitor, obs_source_t *sour
 		return false;
 	}
 
-	if (source->info.output_flags & OBS_SOURCE_DO_NOT_SELF_MONITOR) {
+	if (source && (source->info.output_flags & OBS_SOURCE_DO_NOT_SELF_MONITOR)) {
 		obs_data_t *s = obs_source_get_settings(source);
 		const char *s_dev_id = obs_data_get_string(s, "device_id");
 		bool match = devices_match(s_dev_id, id);
@@ -403,8 +419,12 @@ static void audio_monitor_init_final(struct audio_monitor *monitor)
 	if (monitor->ignore)
 		return;
 
-	monitor->source_has_video = (monitor->source->info.output_flags & OBS_SOURCE_VIDEO) != 0;
-	obs_source_add_audio_capture_callback(monitor->source, on_audio_playback, monitor);
+	if (monitor->output_mix) {
+		obs_add_raw_audio_callback(monitor->mix_idx, NULL, on_audio_output, monitor);
+	} else {
+		monitor->source_has_video = (monitor->source->info.output_flags & OBS_SOURCE_VIDEO) != 0;
+		obs_source_add_audio_capture_callback(monitor->source, on_audio_playback, monitor);
+	}
 }
 
 struct audio_monitor *audio_monitor_create(obs_source_t *source)
@@ -412,9 +432,31 @@ struct audio_monitor *audio_monitor_create(obs_source_t *source)
 	struct audio_monitor monitor = {0};
 	struct audio_monitor *out;
 
-	if (!audio_monitor_init(&monitor, source)) {
+	if (!audio_monitor_init(&monitor, source, 0, false)) {
 		goto fail;
 	}
+
+	out = bmemdup(&monitor, sizeof(monitor));
+
+	pthread_mutex_lock(&obs->audio.monitoring_mutex);
+	da_push_back(obs->audio.monitors, &out);
+	pthread_mutex_unlock(&obs->audio.monitoring_mutex);
+
+	audio_monitor_init_final(out);
+	return out;
+
+fail:
+	audio_monitor_free(&monitor);
+	return NULL;
+}
+
+struct audio_monitor *audio_monitor_create_output(size_t mix_idx)
+{
+	struct audio_monitor monitor = {0};
+	struct audio_monitor *out;
+
+	if (mix_idx >= MAX_AUDIO_MIXES || !audio_monitor_init(&monitor, NULL, mix_idx, true))
+		goto fail;
 
 	out = bmemdup(&monitor, sizeof(monitor));
 
@@ -434,13 +476,15 @@ void audio_monitor_reset(struct audio_monitor *monitor)
 {
 	struct audio_monitor new_monitor = {0};
 	bool success;
+	obs_source_t *source = monitor->source;
+	size_t mix_idx = monitor->mix_idx;
+	bool output_mix = monitor->output_mix;
 
 	AcquireSRWLockExclusive(&monitor->playback_mutex);
-	success = audio_monitor_init(&new_monitor, monitor->source);
+	success = audio_monitor_init(&new_monitor, source, mix_idx, output_mix);
 	ReleaseSRWLockExclusive(&monitor->playback_mutex);
 
 	if (success) {
-		obs_source_t *source = monitor->source;
 		audio_monitor_free(monitor);
 		*monitor = new_monitor;
 		audio_monitor_init_final(monitor);

@@ -22,6 +22,20 @@ OBSBasicAdvAudio::OBSBasicAdvAudio(QWidget *parent) : QDialog(parent), ui(new Ui
 	if (volType == VolumeType::Percent)
 		ui->usePercent->setChecked(true);
 
+	if (obs_audio_monitoring_available()) {
+		ui->monitorBus->blockSignals(true);
+		ui->monitorBus->addItem(QTStr("Basic.AdvAudio.MonitorBus.Off"), -1);
+		for (int mix = 0; mix < MAX_AUDIO_MIXES; mix++)
+			ui->monitorBus->addItem(QTStr("Basic.AdvAudio.MonitorBus.Bus").arg(mix + 1), mix);
+
+		int index = ui->monitorBus->findData(obs_get_audio_monitoring_mix());
+		ui->monitorBus->setCurrentIndex(index >= 0 ? index : 0);
+		ui->monitorBus->blockSignals(false);
+	} else {
+		ui->monitorBusLabel->hide();
+		ui->monitorBus->hide();
+	}
+
 	installEventFilter(CreateShortcutFilter());
 
 	/* enum user scene/sources */
@@ -135,6 +149,23 @@ void OBSBasicAdvAudio::on_usePercent_toggled(bool checked)
 void OBSBasicAdvAudio::on_activeOnly_toggled(bool checked)
 {
 	SetShowInactive(!checked);
+}
+
+void OBSBasicAdvAudio::on_monitorBus_currentIndexChanged(int index)
+{
+	int mix = ui->monitorBus->itemData(index).toInt();
+	if (!obs_set_audio_monitoring_mix(mix)) {
+		mix = -1;
+		ui->monitorBus->blockSignals(true);
+		ui->monitorBus->setCurrentIndex(ui->monitorBus->findData(mix));
+		ui->monitorBus->blockSignals(false);
+	}
+
+	config_set_int(OBSBasic::Get()->Config(), "Audio", "MonitoringMix", mix);
+	if (mix >= 0)
+		blog(LOG_INFO, "Output bus monitoring: bus %d", mix + 1);
+	else
+		blog(LOG_INFO, "Output bus monitoring: off");
 }
 
 void OBSBasicAdvAudio::SetShowInactive(bool show)

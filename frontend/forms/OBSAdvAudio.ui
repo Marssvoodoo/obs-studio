@@ -57,6 +57,26 @@
       </widget>
      </item>
      <item>
+      <widget class="QLabel" name="monitorBusLabel">
+       <property name="text">
+        <string>Basic.AdvAudio.MonitorBus</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QComboBox" name="monitorBus">
+       <property name="toolTip">
+        <string>Basic.AdvAudio.MonitorBus.Tooltip</string>
+       </property>
+       <property name="accessibleName">
+        <string>Basic.AdvAudio.MonitorBus</string>
+       </property>
+       <property name="accessibleDescription">
+        <string>Basic.AdvAudio.MonitorBus.Tooltip</string>
+       </property>
+      </widget>
+     </item>
+     <item>
       <spacer name="horizontalSpacer">
        <property name="orientation">
         <enum>Qt::Horizontal</enum>

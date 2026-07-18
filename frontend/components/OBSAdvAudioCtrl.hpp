@@ -2,6 +2,7 @@
 
 #include <obs.hpp>
 
+#include <array>
 #include <QObject>
 #include <QPointer>
 
@@ -47,6 +48,7 @@ private:
 	QPointer<QCheckBox> mixer4;
 	QPointer<QCheckBox> mixer5;
 	QPointer<QCheckBox> mixer6;
+	std::array<QPointer<QDoubleSpinBox>, MAX_AUDIO_MIXES> mixLevels;
 
 	std::vector<OBSSignal> sigs;
 
@@ -57,6 +59,7 @@ private:
 	static void OBSSourceSyncChanged(void *param, calldata_t *calldata);
 	static void OBSSourceMonitoringTypeChanged(void *param, calldata_t *calldata);
 	static void OBSSourceMixersChanged(void *param, calldata_t *calldata);
+	static void OBSSourceMixLevelChanged(void *param, calldata_t *calldata);
 	static void OBSSourceBalanceChanged(void *param, calldata_t *calldata);
 	static void OBSSourceRenamed(void *param, calldata_t *calldata);
 
@@ -77,6 +80,7 @@ public slots:
 	void SourceSyncChanged(int64_t offset);
 	void SourceMonitoringTypeChanged(int type);
 	void SourceMixersChanged(uint32_t mixers);
+	void SourceMixLevelChanged(int mixer, float level);
 	void SourceBalanceChanged(int balance);
 	void SetSourceName(QString newName);
 
@@ -86,5 +90,6 @@ public slots:
 	void balanceChanged(int val);
 	void syncOffsetChanged(int milliseconds);
 	void monitoringTypeChanged(int index);
+	void audioMixLevelChanged(int mixer, double db);
 	void ResetBalance();
 };

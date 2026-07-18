@@ -955,8 +955,16 @@
     <property name="title">
      <string>Basic.MainMenu.Docks</string>
     </property>
+    <widget class="QMenu" name="dockLayoutsMenu">
+     <property name="title">
+      <string>Basic.MainMenu.Docks.Layouts</string>
+     </property>
+     <addaction name="applyStandardDockLayout"/>
+     <addaction name="applyBalancedDockLayout"/>
+    </widget>
     <addaction name="lockDocks"/>
     <addaction name="sideDocks"/>
+    <addaction name="dockLayoutsMenu"/>
     <addaction name="resetDocks"/>
     <addaction name="separator"/>
    </widget>
@@ -2055,6 +2063,16 @@
   <action name="resetDocks">
    <property name="text">
     <string>Basic.MainMenu.Docks.ResetDocks</string>
+   </property>
+  </action>
+  <action name="applyStandardDockLayout">
+   <property name="text">
+    <string>Basic.MainMenu.Docks.Layout.Standard</string>
+   </property>
+  </action>
+  <action name="applyBalancedDockLayout">
+   <property name="text">
+    <string>Basic.MainMenu.Docks.Layout.Balanced666</string>
    </property>
   </action>
   <action name="lockDocks">

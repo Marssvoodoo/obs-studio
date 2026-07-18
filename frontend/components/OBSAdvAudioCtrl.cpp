@@ -6,6 +6,8 @@
 #include <qt-wrappers.hpp>
 
 #include <QCheckBox>
+#include <QDoubleSpinBox>
+#include <QGridLayout>
 #include <QStackedWidget>
 
 #include "moc_OBSAdvAudioCtrl.cpp"
@@ -22,6 +24,7 @@ static inline void setMixer(obs_source_t *source, const int mixerIdx, const bool
 OBSAdvAudioCtrl::OBSAdvAudioCtrl(QGridLayout *, obs_source_t *source_) : source(source_)
 {
 	QHBoxLayout *hlayout;
+	QGridLayout *mixerLayout;
 	signal_handler_t *handler = obs_source_get_signal_handler(source);
 	QString sourceName = QT_UTF8(obs_source_get_name(source));
 	float vol = obs_source_get_volume(source);
@@ -49,6 +52,8 @@ OBSAdvAudioCtrl::OBSAdvAudioCtrl(QGridLayout *, obs_source_t *source_) : source(
 	mixer4 = new QCheckBox();
 	mixer5 = new QCheckBox();
 	mixer6 = new QCheckBox();
+	for (auto &mixLevel : mixLevels)
+		mixLevel = new QDoubleSpinBox();
 
 	sigs.emplace_back(handler, "activate", OBSSourceActivated, this);
 	sigs.emplace_back(handler, "deactivate", OBSSourceDeactivated, this);
@@ -60,12 +65,15 @@ OBSAdvAudioCtrl::OBSAdvAudioCtrl(QGridLayout *, obs_source_t *source_) : source(
 	if (obs_audio_monitoring_available())
 		sigs.emplace_back(handler, "audio_monitoring", OBSSourceMonitoringTypeChanged, this);
 	sigs.emplace_back(handler, "audio_mixers", OBSSourceMixersChanged, this);
+	sigs.emplace_back(handler, "audio_mix_level", OBSSourceMixLevelChanged, this);
 	sigs.emplace_back(handler, "audio_balance", OBSSourceBalanceChanged, this);
 	sigs.emplace_back(handler, "rename", OBSSourceRenamed, this);
 
-	hlayout = new QHBoxLayout();
-	hlayout->setContentsMargins(0, 0, 0, 0);
-	mixerContainer->setLayout(hlayout);
+	mixerLayout = new QGridLayout();
+	mixerLayout->setContentsMargins(0, 0, 0, 0);
+	mixerLayout->setHorizontalSpacing(4);
+	mixerLayout->setVerticalSpacing(2);
+	mixerContainer->setLayout(mixerLayout);
 	hlayout = new QHBoxLayout();
 	hlayout->setContentsMargins(0, 0, 0, 0);
 	balanceContainer->setLayout(hlayout);
@@ -181,6 +189,23 @@ OBSAdvAudioCtrl::OBSAdvAudioCtrl(QGridLayout *, obs_source_t *source_) : source(
 	mixer6->setChecked(mixers & (1 << 5));
 	mixer6->setAccessibleName(QTStr("Basic.Settings.Output.Adv.Audio.Track6"));
 
+	const std::array<QCheckBox *, MAX_AUDIO_MIXES> mixerChecks = {mixer1, mixer2, mixer3, mixer4, mixer5, mixer6};
+	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++) {
+		QDoubleSpinBox *level = mixLevels[mix];
+		level->setMinimum(MIN_DB - 0.1);
+		level->setMaximum(MAX_DB);
+		level->setSingleStep(0.5);
+		level->setDecimals(1);
+		level->setSuffix(" dB");
+		level->setFixedWidth(72);
+		level->setKeyboardTracking(false);
+		level->setSpecialValueText("-inf dB");
+		level->setValue(obs_mul_to_db(obs_source_get_audio_mix_level(source, mix)));
+		level->setEnabled(mixerChecks[mix]->isChecked());
+		level->setAccessibleName(QTStr("Basic.AdvAudio.SendLevelSource").arg(sourceName).arg((int)mix + 1));
+		level->setToolTip(QTStr("Basic.AdvAudio.SendLevel.Tooltip").arg((int)mix + 1));
+	}
+
 	balanceContainer->layout()->addWidget(labelL);
 	balanceContainer->layout()->addWidget(balance);
 	balanceContainer->layout()->addWidget(labelR);
@@ -190,12 +215,10 @@ OBSAdvAudioCtrl::OBSAdvAudioCtrl(QGridLayout *, obs_source_t *source_) : source(
 	if (sl != SPEAKERS_STEREO)
 		balanceContainer->setEnabled(false);
 
-	mixerContainer->layout()->addWidget(mixer1);
-	mixerContainer->layout()->addWidget(mixer2);
-	mixerContainer->layout()->addWidget(mixer3);
-	mixerContainer->layout()->addWidget(mixer4);
-	mixerContainer->layout()->addWidget(mixer5);
-	mixerContainer->layout()->addWidget(mixer6);
+	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++) {
+		mixerLayout->addWidget(mixerChecks[mix], 0, (int)mix, Qt::AlignHCenter);
+		mixerLayout->addWidget(mixLevels[mix], 1, (int)mix);
+	}
 	mixerContainer->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
 
 	connect(volume, &QDoubleSpinBox::valueChanged, this, &OBSAdvAudioCtrl::volumeChanged);
@@ -217,6 +240,11 @@ OBSAdvAudioCtrl::OBSAdvAudioCtrl(QGridLayout *, obs_source_t *source_) : source(
 	connectMixer(mixer4, 3);
 	connectMixer(mixer5, 4);
 	connectMixer(mixer6, 5);
+
+	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++) {
+		connect(mixLevels[mix], &QDoubleSpinBox::valueChanged, this,
+			[this, mix](double db) { audioMixLevelChanged((int)mix, db); });
+	}
 
 	setObjectName(sourceName);
 }
@@ -299,6 +327,14 @@ void OBSAdvAudioCtrl::OBSSourceMixersChanged(void *param, calldata_t *calldata)
 				  Q_ARG(uint32_t, mixers));
 }
 
+void OBSAdvAudioCtrl::OBSSourceMixLevelChanged(void *param, calldata_t *calldata)
+{
+	int mixer = (int)calldata_int(calldata, "mixer");
+	float level = (float)calldata_float(calldata, "level");
+	QMetaObject::invokeMethod(static_cast<OBSAdvAudioCtrl *>(param), "SourceMixLevelChanged", Q_ARG(int, mixer),
+				  Q_ARG(float, level));
+}
+
 void OBSAdvAudioCtrl::OBSSourceBalanceChanged(void *param, calldata_t *calldata)
 {
 	int balance = (float)calldata_float(calldata, "balance") * 100.0f;
@@ -379,6 +415,19 @@ void OBSAdvAudioCtrl::SourceMixersChanged(uint32_t mixers)
 	setCheckboxState(mixer4, mixers & (1 << 3));
 	setCheckboxState(mixer5, mixers & (1 << 4));
 	setCheckboxState(mixer6, mixers & (1 << 5));
+	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++)
+		mixLevels[mix]->setEnabled((mixers & (1u << mix)) != 0);
+}
+
+void OBSAdvAudioCtrl::SourceMixLevelChanged(int mixer, float level)
+{
+	if (mixer < 0 || mixer >= MAX_AUDIO_MIXES)
+		return;
+
+	QDoubleSpinBox *control = mixLevels[(size_t)mixer];
+	control->blockSignals(true);
+	control->setValue(obs_mul_to_db(level));
+	control->blockSignals(false);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -552,6 +601,33 @@ void OBSAdvAudioCtrl::monitoringTypeChanged(int index)
 	OBSBasic::Get()->undo_s.add_action(QTStr("Undo.MonitoringType.Change").arg(name),
 					   std::bind(undo_redo, std::placeholders::_1, prev),
 					   std::bind(undo_redo, std::placeholders::_1, mt), uuid, uuid);
+}
+
+void OBSAdvAudioCtrl::audioMixLevelChanged(int mixer, double db)
+{
+	if (mixer < 0 || mixer >= MAX_AUDIO_MIXES)
+		return;
+
+	float prev = obs_source_get_audio_mix_level(source, (size_t)mixer);
+	if (db < MIN_DB)
+		db = -INFINITY;
+	float level = obs_db_to_mul(db);
+
+	if (prev == level)
+		return;
+
+	obs_source_set_audio_mix_level(source, (size_t)mixer, level);
+
+	auto undo_redo = [](const std::string &uuid, int mixer, float level) {
+		OBSSourceAutoRelease source = obs_get_source_by_uuid(uuid.c_str());
+		obs_source_set_audio_mix_level(source, (size_t)mixer, level);
+	};
+
+	const char *name = obs_source_get_name(source);
+	const char *uuid = obs_source_get_uuid(source);
+	OBSBasic::Get()->undo_s.add_action(QTStr("Undo.AudioMixLevel.Change").arg(name).arg(mixer + 1),
+					   std::bind(undo_redo, std::placeholders::_1, mixer, prev),
+					   std::bind(undo_redo, std::placeholders::_1, mixer, level), uuid, uuid, true);
 }
 
 static inline void setMixer(obs_source_t *source, const int mixerIdx, const bool checked)

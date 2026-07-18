@@ -32,6 +32,22 @@
 #include "obs-internal.h"
 
 #define get_weak(source) ((obs_weak_source_t *)source->context.control)
+#define MAX_AUDIO_MIX_LEVEL 20.0f
+
+static inline long audio_mix_level_to_bits(float level)
+{
+	uint32_t bits;
+	memcpy(&bits, &level, sizeof(bits));
+	return (long)bits;
+}
+
+static inline float audio_mix_level_from_bits(long bits)
+{
+	uint32_t value = (uint32_t)bits;
+	float level;
+	memcpy(&level, &value, sizeof(level));
+	return level;
+}
 
 static bool filter_compatible(obs_source_t *source, obs_source_t *filter);
 
@@ -95,6 +111,7 @@ static const char *source_signals[] = {
 	"void audio_sync(ptr source, int out int offset)",
 	"void audio_balance(ptr source, in out float balance)",
 	"void audio_mixers(ptr source, in out int mixers)",
+	"void audio_mix_level(ptr source, int mixer, in out float level)",
 	"void audio_monitoring(ptr source, int type)",
 	"void audio_activate(ptr source)",
 	"void audio_deactivate(ptr source)",
@@ -288,6 +305,8 @@ static bool obs_source_init(struct obs_source *source)
 
 	source->deinterlace_top_first = true;
 	source->audio_mixers = 0xFF;
+	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++)
+		os_atomic_store_long(&source->audio_mix_levels[mix], audio_mix_level_to_bits(1.0f));
 
 	source->private_settings = obs_data_create();
 	return true;
@@ -693,6 +712,10 @@ obs_source_t *obs_source_duplicate(obs_source_t *source, const char *new_name, b
 				    : obs_source_create(source->info.id, new_name, settings, NULL);
 
 	new_source->audio_mixers = source->audio_mixers;
+	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++) {
+		long level = os_atomic_load_long(&source->audio_mix_levels[mix]);
+		os_atomic_store_long(&new_source->audio_mix_levels[mix], level);
+	}
 	new_source->sync_offset = source->sync_offset;
 	new_source->user_volume = source->user_volume;
 	new_source->user_muted = source->user_muted;
@@ -4913,6 +4936,51 @@ uint32_t obs_source_get_audio_mixers(const obs_source_t *source)
 	return source->audio_mixers;
 }
 
+void obs_source_set_audio_mix_level(obs_source_t *source, size_t mixer_idx, float level)
+{
+	struct calldata data;
+	uint8_t stack[128];
+
+	if (!obs_source_valid(source, "obs_source_set_audio_mix_level"))
+		return;
+	if (!source->owns_info_id && (source->info.output_flags & OBS_SOURCE_AUDIO) == 0)
+		return;
+	if (mixer_idx >= MAX_AUDIO_MIXES || !isfinite(level) || level < 0.0f)
+		return;
+
+	if (level > MAX_AUDIO_MIX_LEVEL)
+		level = MAX_AUDIO_MIX_LEVEL;
+	if (audio_mix_level_from_bits(os_atomic_load_long(&source->audio_mix_levels[mixer_idx])) == level)
+		return;
+
+	calldata_init_fixed(&data, stack, sizeof(stack));
+	calldata_set_ptr(&data, "source", source);
+	calldata_set_int(&data, "mixer", (long long)mixer_idx);
+	calldata_set_float(&data, "level", level);
+
+	signal_handler_signal(source->context.signals, "audio_mix_level", &data);
+	level = (float)calldata_float(&data, "level");
+
+	if (!isfinite(level) || level < 0.0f)
+		return;
+
+	if (level > MAX_AUDIO_MIX_LEVEL)
+		level = MAX_AUDIO_MIX_LEVEL;
+	os_atomic_store_long(&source->audio_mix_levels[mixer_idx], audio_mix_level_to_bits(level));
+}
+
+float obs_source_get_audio_mix_level(const obs_source_t *source, size_t mixer_idx)
+{
+	if (!obs_source_valid(source, "obs_source_get_audio_mix_level"))
+		return 1.0f;
+	if (!source->owns_info_id && (source->info.output_flags & OBS_SOURCE_AUDIO) == 0)
+		return 1.0f;
+	if (mixer_idx >= MAX_AUDIO_MIXES)
+		return 1.0f;
+
+	return audio_mix_level_from_bits(os_atomic_load_long(&source->audio_mix_levels[mixer_idx]));
+}
+
 void obs_source_draw_set_color_matrix(const struct matrix4 *color_matrix, const struct vec3 *color_range_min,
 				      const struct vec3 *color_range_max)
 {
@@ -5356,8 +5424,13 @@ static void apply_audio_actions(obs_source_t *source, size_t channels, size_t sa
 	pthread_mutex_unlock(&source->audio_actions_mutex);
 
 	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++) {
-		if ((source->audio_mixers & (1 << mix)) != 0)
+		if ((source->audio_mixers & (1 << mix)) != 0) {
 			multiply_vol_data(source, mix, channels, vol_data);
+
+			float level = audio_mix_level_from_bits(os_atomic_load_long(&source->audio_mix_levels[mix]));
+			if (level != 1.0f)
+				multiply_output_audio(source, mix, channels, level);
+		}
 	}
 }
 
@@ -5385,9 +5458,6 @@ static void apply_audio_volume(obs_source_t *source, uint32_t mixers, size_t cha
 	}
 
 	vol = get_source_volume(source, source->audio_ts);
-	if (vol == 1.0f)
-		return;
-
 	if (vol == 0.0f || mixers == 0) {
 		memset(source->audio_output_buf[0][0], 0,
 		       AUDIO_OUTPUT_FRAMES * sizeof(float) * MAX_AUDIO_CHANNELS * MAX_AUDIO_MIXES);
@@ -5396,8 +5466,16 @@ static void apply_audio_volume(obs_source_t *source, uint32_t mixers, size_t cha
 
 	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++) {
 		uint32_t mix_and_val = (1 << mix);
-		if ((source->audio_mixers & mix_and_val) != 0 && (mixers & mix_and_val) != 0)
-			multiply_output_audio(source, mix, channels, vol);
+		if ((source->audio_mixers & mix_and_val) == 0 || (mixers & mix_and_val) == 0)
+			continue;
+
+		float level = audio_mix_level_from_bits(os_atomic_load_long(&source->audio_mix_levels[mix]));
+		float combined = vol * level;
+		if (combined == 0.0f) {
+			memset(source->audio_output_buf[mix][0], 0, AUDIO_OUTPUT_FRAMES * sizeof(float) * channels);
+		} else if (combined != 1.0f) {
+			multiply_output_audio(source, mix, channels, combined);
+		}
 	}
 }
 

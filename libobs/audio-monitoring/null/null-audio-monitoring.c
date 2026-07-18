@@ -17,6 +17,12 @@ struct audio_monitor *audio_monitor_create(obs_source_t *source)
 	return NULL;
 }
 
+struct audio_monitor *audio_monitor_create_output(size_t mix_idx)
+{
+	UNUSED_PARAMETER(mix_idx);
+	return NULL;
+}
+
 void audio_monitor_reset(struct audio_monitor *monitor)
 {
 	UNUSED_PARAMETER(monitor);

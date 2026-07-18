@@ -388,6 +388,7 @@ void OBSApp::InitUserConfigDefaults()
 	config_set_default_bool(App()->GetUserConfig(), "BasicWindow", "MixerKeepInactiveLast", false);
 	config_set_default_bool(App()->GetUserConfig(), "BasicWindow", "MixerShowHidden", false);
 	config_set_default_bool(App()->GetUserConfig(), "BasicWindow", "MixerKeepHiddenLast", false);
+	config_set_default_bool(App()->GetUserConfig(), "BasicWindow", "MixerShowProgramAudio", true);
 
 	config_set_default_int(userConfig, "Appearance", "FontScale", 10);
 	config_set_default_int(userConfig, "Appearance", "Density", 1);

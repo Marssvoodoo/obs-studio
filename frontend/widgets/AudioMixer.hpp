@@ -35,6 +35,7 @@ class QScrollArea;
 class QStackedWidget;
 class QToolBar;
 class QVBoxLayout;
+class ProgramAudioStrip;
 
 class AudioMixer : public QFrame {
 	Q_OBJECT
@@ -77,8 +78,10 @@ private:
 	bool keepHiddenLast{false};
 
 	bool showToolbar{true};
+	bool showProgramAudio{true};
 
 	QVBoxLayout *mainLayout{nullptr};
+	ProgramAudioStrip *programAudioStrip{nullptr};
 
 	QStackedWidget *stackedMixerArea{nullptr};
 	QToolBar *mixerToolbar{nullptr};
@@ -89,6 +92,7 @@ private:
 
 	QPointer<QMenu> mixerMenu;
 	QPointer<MenuCheckBox> showHiddenCheckBox;
+	QPointer<MenuCheckBox> showProgramAudioCheckBox;
 
 	QScrollArea *hMixerScrollArea{nullptr};
 	QWidget *hVolumeWidgets{nullptr};
@@ -112,6 +116,7 @@ private:
 	void updateShowHidden();
 	void updateKeepHiddenLast();
 	void updateShowToolbar();
+	void updateShowProgramAudio();
 
 	QTimer updateTimer;
 	void updateVolumeLayouts();
@@ -142,6 +147,7 @@ private slots:
 	void toggleKeepInactiveLast(bool checked);
 	void toggleShowHidden(bool checked);
 	void toggleKeepHiddenLast(bool checked);
+	void toggleShowProgramAudio(bool checked);
 
 	void mixerContextMenuRequested();
 

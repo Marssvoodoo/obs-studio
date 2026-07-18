@@ -758,6 +758,11 @@ void OBSBasic::ResetProfileData()
 		const char *device_id = config_get_string(activeConfiguration, "Audio", "MonitoringDeviceId");
 
 		obs_set_audio_monitoring_device(device_name, device_id);
+		int monitoring_mix = (int)config_get_int(activeConfiguration, "Audio", "MonitoringMix");
+		if (!obs_set_audio_monitoring_mix(monitoring_mix) && monitoring_mix >= 0) {
+			config_set_int(activeConfiguration, "Audio", "MonitoringMix", -1);
+			blog(LOG_WARNING, "Unable to enable output bus monitoring; falling back to off");
+		}
 
 		blog(LOG_INFO, "Audio monitoring device:\n\tname: %s\n\tid: %s", device_name, device_id);
 	}

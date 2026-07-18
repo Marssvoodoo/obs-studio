@@ -457,6 +457,8 @@ struct obs_core_audio {
 
 	pthread_mutex_t monitoring_mutex;
 	DARRAY(struct audio_monitor *) monitors;
+	struct audio_monitor *output_monitor;
+	int monitoring_mix_idx;
 	char *monitoring_device_name;
 	char *monitoring_device_id;
 
@@ -933,6 +935,7 @@ struct obs_source {
 	struct obs_audio_data audio_data;
 	size_t audio_storage_size;
 	uint32_t audio_mixers;
+	volatile long audio_mix_levels[MAX_AUDIO_MIXES];
 	float user_volume;
 	float volume;
 	int64_t sync_offset;
@@ -1084,6 +1087,7 @@ extern void obs_transition_save(obs_source_t *source, obs_data_t *data);
 extern void obs_transition_load(obs_source_t *source, obs_data_t *data);
 
 struct audio_monitor *audio_monitor_create(obs_source_t *source);
+struct audio_monitor *audio_monitor_create_output(size_t mix_idx);
 void audio_monitor_reset(struct audio_monitor *monitor);
 extern void audio_monitor_destroy(struct audio_monitor *monitor);
 

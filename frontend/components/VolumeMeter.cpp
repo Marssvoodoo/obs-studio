@@ -326,10 +326,11 @@ VolumeMeter::VolumeMeter(QWidget *parent, obs_source_t *source)
 	channels = (int)audio_output_get_channels(obs_get_audio());
 
 	obs_volmeter_add_callback(obsVolumeMeter, obsVolMeterChanged, this);
-	obs_volmeter_attach_source(obsVolumeMeter, source);
-
-	destroyedSignal =
-		OBSSignal(obs_source_get_signal_handler(source), "destroy", &VolumeMeter::obsSourceDestroyed, this);
+	if (source) {
+		obs_volmeter_attach_source(obsVolumeMeter, source);
+		destroyedSignal = OBSSignal(obs_source_get_signal_handler(source), "destroy",
+					    &VolumeMeter::obsSourceDestroyed, this);
+	}
 
 	if (!updateTimer) {
 		updateTimer = new QTimer(qApp);
@@ -389,6 +390,21 @@ void VolumeMeter::setLevels(const float magnitude[MAX_AUDIO_CHANNELS], const flo
 	calculateBallistics(ts);
 }
 
+void VolumeMeter::setManualChannelCount(int channelCount)
+{
+	channelCount = std::clamp(channelCount, 0, MAX_AUDIO_CHANNELS);
+	if (manualChannelCount == channelCount)
+		return;
+
+	manualChannelCount = channelCount;
+	if (manualChannelCount > 0)
+		channels = manualChannelCount;
+
+	if (needLayoutChange())
+		doLayout();
+	update();
+}
+
 float VolumeMeter::takeRecentPeak()
 {
 	QMutexLocker locker(&dataMutex);
@@ -425,7 +441,9 @@ inline void VolumeMeter::resetLevels()
 
 bool VolumeMeter::needLayoutChange()
 {
-	int currentNrAudioChannels = obs_volmeter_get_nr_channels(obsVolumeMeter);
+	int currentNrAudioChannels = manualChannelCount;
+	if (!currentNrAudioChannels)
+		currentNrAudioChannels = obs_volmeter_get_nr_channels(obsVolumeMeter);
 
 	if (!currentNrAudioChannels) {
 		struct obs_audio_info oai;

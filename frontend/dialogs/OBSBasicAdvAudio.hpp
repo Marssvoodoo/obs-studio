@@ -35,6 +35,7 @@ public slots:
 
 	void on_usePercent_toggled(bool checked);
 	void on_activeOnly_toggled(bool checked);
+	void on_monitorBus_currentIndexChanged(int index);
 
 public:
 	OBSBasicAdvAudio(QWidget *parent);

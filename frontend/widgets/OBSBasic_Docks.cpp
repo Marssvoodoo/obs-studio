@@ -101,6 +101,73 @@ void OBSBasic::on_resetDocks_triggered(bool force)
 	activateWindow();
 }
 
+void OBSBasic::on_applyStandardDockLayout_triggered()
+{
+	on_resetDocks_triggered(false);
+}
+
+void OBSBasic::on_applyBalancedDockLayout_triggered()
+{
+	QList<QDockWidget *> rightColumn;
+	QDockWidget *preferredRightDock = nullptr;
+	int preferredRightX = 0;
+	auto rememberVisible = [&rightColumn, &preferredRightDock, &preferredRightX](QDockWidget *dock) {
+		if (!dock || !dock->isVisible())
+			return;
+
+		rightColumn.push_back(dock);
+		if (!dock->visibleRegion().isEmpty()) {
+			const int dockX = dock->mapToGlobal(dock->rect().center()).x();
+			if (!preferredRightDock || dockX > preferredRightX) {
+				preferredRightDock = dock;
+				preferredRightX = dockX;
+			}
+		}
+	};
+
+	for (const auto &dock : extraDocks)
+		rememberVisible(dock.get());
+	for (const auto &dock : extraCustomDocks)
+		rememberVisible(dock.data());
+#ifdef BROWSER_AVAILABLE
+	for (const auto &dock : extraBrowserDocks)
+		rememberVisible(dock.get());
+#endif
+	rememberVisible(statsDock);
+
+	on_resetDocks_triggered(true);
+	setDockCornersVertical(true);
+	ui->sideDocks->setChecked(true);
+
+	QDockWidget *rightAnchor = nullptr;
+	for (QDockWidget *dock : rightColumn) {
+		removeDockWidget(dock);
+		addDockWidget(Qt::RightDockWidgetArea, dock);
+		dock->setFloating(false);
+		dock->setVisible(true);
+		if (rightAnchor)
+			tabifyDockWidget(rightAnchor, dock);
+		else
+			rightAnchor = dock;
+	}
+	if (preferredRightDock)
+		preferredRightDock->raise();
+	else if (rightAnchor)
+		rightAnchor->raise();
+
+	const int third = std::max(width() / 3, 280);
+	resizeDocks({ui->scenesDock, ui->sourcesDock}, {third, third}, Qt::Horizontal);
+	resizeDocks({ui->scenesDock, ui->sourcesDock}, {1, 1}, Qt::Vertical);
+
+	QList<QDockWidget *> middleRow{ui->mixerDock, ui->transitionsDock, controlsDock};
+	resizeDocks(middleRow, {1, 1, 1}, Qt::Horizontal);
+
+	if (rightAnchor)
+		resizeDocks({ui->scenesDock, previewDock, rightAnchor}, {third, third, third}, Qt::Horizontal);
+
+	activateWindow();
+}
+
 void OBSBasic::on_lockDocks_toggled(bool lock)
 {
 	QDockWidget::DockWidgetFeatures features =

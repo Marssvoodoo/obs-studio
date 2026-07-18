@@ -936,6 +936,8 @@ static bool obs_init_audio(struct audio_output_info *ai)
 
 	audio->monitoring_device_name = bstrdup("Default");
 	audio->monitoring_device_id = bstrdup("default");
+	audio->output_monitor = NULL;
+	audio->monitoring_mix_idx = -1;
 	audio->monitoring_duplicating_source = NULL;
 	os_atomic_set_long(&audio->graph_dirty, 1);
 
@@ -1011,6 +1013,13 @@ static void obs_free_audio(void)
 	void *render_job_batch_save = audio->render_job_batch;
 	bool graph_hooks_connected = audio->graph_hooks_connected;
 	const bool destroying_core_data = !obs->data.valid;
+
+	/* Disconnect the final-mix monitor while the audio output still exists. */
+	if (audio->output_monitor) {
+		audio_monitor_destroy(audio->output_monitor);
+		audio->output_monitor = NULL;
+		audio->monitoring_mix_idx = -1;
+	}
 
 	/* Stop the audio thread first so no new render dispatches start. */
 	if (audio->audio)
@@ -2468,6 +2477,16 @@ static obs_source_t *obs_load_source_type(obs_data_t *source_data, bool is_priva
 	mixers = (uint32_t)obs_data_get_int(source_data, "mixers");
 	obs_source_set_audio_mixers(source, mixers);
 
+	obs_data_t *mix_levels = obs_data_get_obj(source_data, "mix_levels");
+	if (mix_levels) {
+		for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++) {
+			char key[2] = {(char)('1' + mix), '\0'};
+			obs_data_set_default_double(mix_levels, key, 1.0);
+			obs_source_set_audio_mix_level(source, mix, (float)obs_data_get_double(mix_levels, key));
+		}
+		obs_data_release(mix_levels);
+	}
+
 	obs_data_set_default_int(source_data, "flags", source->default_flags);
 	flags = (uint32_t)obs_data_get_int(source_data, "flags");
 	obs_source_set_flags(source, flags);
@@ -2631,6 +2650,13 @@ obs_data_t *obs_save_source(obs_source_t *source)
 	obs_data_set_string(source_data, "versioned_id", v_id);
 	obs_data_set_obj(source_data, "settings", settings);
 	obs_data_set_int(source_data, "mixers", mixers);
+	obs_data_t *mix_levels = obs_data_create();
+	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++) {
+		char key[2] = {(char)('1' + mix), '\0'};
+		obs_data_set_double(mix_levels, key, obs_source_get_audio_mix_level(source, mix));
+	}
+	obs_data_set_obj(source_data, "mix_levels", mix_levels);
+	obs_data_release(mix_levels);
 	obs_data_set_int(source_data, "sync", sync);
 	obs_data_set_int(source_data, "flags", flags);
 	obs_data_set_double(source_data, "volume", volume);
@@ -3210,6 +3236,48 @@ void obs_get_audio_monitoring_device(const char **name, const char **id)
 		*name = obs->audio.monitoring_device_name;
 	if (id)
 		*id = obs->audio.monitoring_device_id;
+}
+
+bool obs_set_audio_monitoring_mix(int mix_idx)
+{
+	if (!obs || !obs_audio_monitoring_available())
+		return false;
+	if (mix_idx < -1 || mix_idx >= MAX_AUDIO_MIXES)
+		return false;
+	if (mix_idx >= 0 && !obs->audio.audio)
+		return false;
+
+	pthread_mutex_lock(&obs->audio.monitoring_mutex);
+
+	if (obs->audio.monitoring_mix_idx == mix_idx) {
+		pthread_mutex_unlock(&obs->audio.monitoring_mutex);
+		return true;
+	}
+
+	if (obs->audio.output_monitor) {
+		audio_monitor_destroy(obs->audio.output_monitor);
+		obs->audio.output_monitor = NULL;
+	}
+	obs->audio.monitoring_mix_idx = -1;
+
+	if (mix_idx >= 0) {
+		struct audio_monitor *monitor = audio_monitor_create_output((size_t)mix_idx);
+		if (!monitor) {
+			pthread_mutex_unlock(&obs->audio.monitoring_mutex);
+			return false;
+		}
+
+		obs->audio.output_monitor = monitor;
+		obs->audio.monitoring_mix_idx = mix_idx;
+	}
+
+	pthread_mutex_unlock(&obs->audio.monitoring_mutex);
+	return true;
+}
+
+int obs_get_audio_monitoring_mix(void)
+{
+	return obs ? obs->audio.monitoring_mix_idx : -1;
 }
 
 void obs_add_tick_callback(void (*tick)(void *param, float seconds), void *param)

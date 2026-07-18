@@ -131,6 +131,7 @@ private:
 
 	uint64_t lastRedrawTime{0};
 	int channels{0};
+	int manualChannelCount{0};
 	bool clipping{false};
 	bool vertical{false};
 	bool hidden{false};
@@ -143,6 +144,7 @@ public:
 
 	void setLevels(const float magnitude[MAX_AUDIO_CHANNELS], const float peak[MAX_AUDIO_CHANNELS],
 		       const float inputPeak[MAX_AUDIO_CHANNELS]);
+	void setManualChannelCount(int channels);
 	float takeRecentPeak();
 	bool needLayoutChange();
 
