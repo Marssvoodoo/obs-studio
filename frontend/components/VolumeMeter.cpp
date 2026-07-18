@@ -7,6 +7,8 @@
 #include <QStyleOption>
 #include <QTimer>
 
+#include <algorithm>
+
 #include "moc_VolumeMeter.cpp"
 
 QPointer<QTimer> VolumeMeter::updateTimer = nullptr;
@@ -378,12 +380,21 @@ void VolumeMeter::setLevels(const float magnitude[MAX_AUDIO_CHANNELS], const flo
 		currentMagnitude[channelNr] = magnitude[channelNr];
 		currentPeak[channelNr] = peak[channelNr];
 		currentInputPeak[channelNr] = inputPeak[channelNr];
+		recentPeak = std::max(recentPeak, peak[channelNr]);
 	}
 
 	// In case there are more updates then redraws we must make sure
 	// that the ballistics of peak and hold are recalculated.
 	locker.unlock();
 	calculateBallistics(ts);
+}
+
+float VolumeMeter::takeRecentPeak()
+{
+	QMutexLocker locker(&dataMutex);
+	const float peak = recentPeak;
+	recentPeak = -M_INFINITE;
+	return peak;
 }
 
 void VolumeMeter::obsVolMeterChanged(void *data, const float magnitude[MAX_AUDIO_CHANNELS],
@@ -397,6 +408,7 @@ void VolumeMeter::obsVolMeterChanged(void *data, const float magnitude[MAX_AUDIO
 inline void VolumeMeter::resetLevels()
 {
 	currentLastUpdateTime = 0;
+	recentPeak = -M_INFINITE;
 	for (int channelNr = 0; channelNr < MAX_AUDIO_CHANNELS; channelNr++) {
 		currentMagnitude[channelNr] = -M_INFINITE;
 		currentPeak[channelNr] = -M_INFINITE;

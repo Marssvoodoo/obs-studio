@@ -10,6 +10,7 @@
 #include <ui-config.h>
 
 #include <json11.hpp>
+#include <QSizePolicy>
 
 #include "moc_RestreamAuth.cpp"
 
@@ -145,11 +146,14 @@ void RestreamAuth::LoadUI()
 	BrowserDock *chat = new BrowserDock(QTStr("Auth.Chat"));
 	chat->setObjectName(RESTREAM_CHAT_DOCK_NAME);
 	chat->resize(420, 600);
-	chat->setMinimumSize(200, 300);
 	chat->setWindowTitle(QTStr("Auth.Chat"));
 	chat->setAllowedAreas(Qt::AllDockWidgetAreas);
 
 	browser = cef->create_widget(chat, url, panel_cookies);
+	if (browser) {
+		browser->setMinimumSize(200, 300);
+		browser->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+	}
 	chat->SetWidget(browser);
 
 	main->AddDockWidget(chat, Qt::RightDockWidgetArea);
@@ -161,11 +165,14 @@ void RestreamAuth::LoadUI()
 	BrowserDock *info = new BrowserDock(QTStr("Auth.StreamInfo"));
 	info->setObjectName(RESTREAM_INFO_DOCK_NAME);
 	info->resize(410, 600);
-	info->setMinimumSize(200, 150);
 	info->setWindowTitle(QTStr("Auth.StreamInfo"));
 	info->setAllowedAreas(Qt::AllDockWidgetAreas);
 
 	browser = cef->create_widget(info, url, panel_cookies);
+	if (browser) {
+		browser->setMinimumSize(200, 150);
+		browser->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+	}
 	info->SetWidget(browser);
 
 	main->AddDockWidget(info, Qt::LeftDockWidgetArea);
@@ -177,11 +184,14 @@ void RestreamAuth::LoadUI()
 	BrowserDock *channels = new BrowserDock(QTStr("RestreamAuth.Channels"));
 	channels->setObjectName(RESTREAM_CHANNELS_DOCK_NAME);
 	channels->resize(410, 600);
-	channels->setMinimumSize(410, 300);
 	channels->setWindowTitle(QTStr("RestreamAuth.Channels"));
 	channels->setAllowedAreas(Qt::AllDockWidgetAreas);
 
 	browser = cef->create_widget(channels, url, panel_cookies);
+	if (browser) {
+		browser->setMinimumSize(200, 300);
+		browser->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+	}
 	channels->SetWidget(browser);
 
 	main->AddDockWidget(channels, Qt::LeftDockWidgetArea);

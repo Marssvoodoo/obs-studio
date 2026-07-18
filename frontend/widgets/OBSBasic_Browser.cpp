@@ -25,6 +25,7 @@
 #include <qt-wrappers.hpp>
 
 #include <QDir>
+#include <QSizePolicy>
 #include <QUrl>
 
 using namespace json11;
@@ -114,13 +115,16 @@ void OBSBasic::AddExtraBrowserDock(const QString &title, const QString &url, con
 	dock->setProperty("uuid", bId);
 	dock->setObjectName(title + OBJ_NAME_SUFFIX);
 	dock->resize(460, 600);
-	dock->setMinimumSize(80, 80);
 	dock->setWindowTitle(title);
 	dock->setAllowedAreas(Qt::AllDockWidgetAreas);
 
 	QCefWidget *browser = cef->create_widget(dock, QT_TO_UTF8(url), nullptr);
-	if (browser && panel_version >= 1)
-		browser->allowAllPopups(true);
+	if (browser) {
+		browser->setMinimumSize(80, 80);
+		browser->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+		if (panel_version >= 1)
+			browser->allowAllPopups(true);
+	}
 
 	dock->SetWidget(browser);
 
@@ -230,7 +234,6 @@ void OBSBasic::SyncRestreamBrowserDocks(bool forceRemove, bool layoutRestorePend
 		dock->setProperty(fallbackDockProperty, true);
 		dock->setObjectName(dockObjectName);
 		dock->resize(size);
-		dock->setMinimumSize(minimumSize);
 		dock->setWindowTitle(QTStr(title));
 		dock->setAllowedAreas(Qt::AllDockWidgetAreas);
 		QCefWidget *browser = cef->create_widget(dock, url, panel_cookies);
@@ -238,6 +241,8 @@ void OBSBasic::SyncRestreamBrowserDocks(bool forceRemove, bool layoutRestorePend
 			delete dock;
 			return false;
 		}
+		browser->setMinimumSize(minimumSize);
+		browser->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
 		dock->SetWidget(browser);
 
 		AddDockWidget(dock, area);
@@ -255,7 +260,7 @@ void OBSBasic::SyncRestreamBrowserDocks(bool forceRemove, bool layoutRestorePend
 					       "https://restream.io/titles/embed", QSize(410, 600), QSize(200, 150),
 					       Qt::LeftDockWidgetArea, QPoint(mainPos.x() + 20, mainPos.y() + 60));
 	const bool channelReady = addRestreamDock("RestreamAuth.Channels", restreamChannelDockName,
-						  "https://restream.io/channel/embed", QSize(410, 600), QSize(410, 300),
+						  "https://restream.io/channel/embed", QSize(410, 600), QSize(200, 300),
 						  Qt::LeftDockWidgetArea, QPoint(mainPos.x() + 440, mainPos.y() + 60));
 
 	if (chatReady) {

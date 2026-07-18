@@ -13,6 +13,7 @@
 class MuteCheckBox;
 class QBoxLayout;
 class QLabel;
+class QMenu;
 class VolumeMeter;
 
 class VolumeControl : public QFrame {
@@ -76,6 +77,7 @@ private:
 	QLabel *categoryLabel;
 	VolumeName *nameButton;
 	QLabel *volumeLabel;
+	QLabel *levelGuideLabel;
 	VolumeMeter *volumeMeter;
 	VolumeSlider *slider;
 	QPushButton *muteButton;
@@ -84,6 +86,10 @@ private:
 	OBSFader obs_fader;
 
 	QString sourceName;
+	QString levelRole;
+	bool levelRoleAutomatic{true};
+	float heldGuidePeak{-M_INFINITE};
+	int levelGuideHoldTicks{0};
 	bool vertical;
 
 	MixerStatus mixerStatus_;
@@ -107,6 +113,12 @@ private:
 	void showVolumeControlMenu(QPoint pos = QPoint(0, 0));
 	void updateDecayRate();
 	void updatePeakMeterType();
+	QMenu *createLevelGuideMenu(QWidget *parent);
+	void showLevelGuideMenu();
+	void setLevelRole(const QString &role, bool persist = true);
+	void setAutomaticLevelRole();
+	void updateLevelGuide();
+	bool eventFilter(QObject *watched, QEvent *event) override;
 
 	void setMuted(bool mute);
 	void setMonitoring(obs_monitoring_type type);

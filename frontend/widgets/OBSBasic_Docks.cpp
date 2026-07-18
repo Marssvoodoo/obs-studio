@@ -85,6 +85,7 @@ void OBSBasic::on_resetDocks_triggered(bool force)
 	ui->sourcesDock->setVisible(true);
 	ui->mixerDock->setVisible(true);
 	ui->transitionsDock->setVisible(true);
+	previewDock->setVisible(true);
 	controlsDock->setVisible(true);
 	statsDock->setVisible(false);
 	statsDock->setFloating(true);
@@ -115,6 +116,7 @@ void OBSBasic::on_lockDocks_toggled(bool lock)
 	ui->mixerDock->setFeatures(mainFeatures);
 	ui->transitionsDock->setFeatures(mainFeatures);
 	controlsDock->setFeatures(mainFeatures);
+	previewDock->setFeatures(features);
 	statsDock->setFeatures(features);
 
 	for (int i = extraDocks.size() - 1; i >= 0; i--)
@@ -195,6 +197,7 @@ bool OBSBasic::IsDockObjectNameUsed(const QString &name)
 	     << "mixerDock"
 	     << "transitionsDock"
 	     << "controlsDock"
+	     << "previewDock"
 	     << "statsDock";
 	list << extraDockNames;
 	list << extraCustomDockNames;

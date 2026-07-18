@@ -1,0 +1,184 @@
+@OBSThemeMeta {
+    name: 'Ignants Voodoo';
+    id: 'com.marssvoodoo.IgnantsVoodoo';
+    extends: 'com.obsproject.Yami';
+    author: 'MarssVoodoo';
+    dark: 'true';
+}
+
+@OBSThemeVars {
+    /* Ignants.com palette */
+    --grey1: #6A5B5E;
+    --grey2: #53464A;
+    --grey3: #403438;
+    --grey4: #302529;
+    --grey5: #241B1E;
+    --grey6: #1B1517;
+    --grey7: #141012;
+    --grey8: #0B0807;
+
+    --white1: #FFFFFF;
+    --white2: #F5F5F5;
+    --white3: #D9D9D9;
+    --white4: #B8B8B8;
+    --white5: #9AA0A6;
+
+    --red1: #FF7B84;
+    --red2: #FF3D4B;
+    --red3: #E11D2A;
+    --red4: #B01420;
+    --red5: #870D17;
+    --red6: #5A0910;
+
+    --green1: #72D39B;
+    --green2: #3FB873;
+    --green3: #2F925A;
+    --yellow1: #FFD166;
+    --yellow2: #F4B942;
+    --yellow3: #C98B23;
+
+    --bg_window: #0B0807;
+    --bg_base: #141012;
+    --bg_preview: #0B0807;
+
+    --primary: #E11D2A;
+    --primary_light: #FF3D4B;
+    --primary_lighter: #FF7B84;
+    --primary_dark: #B01420;
+    --primary_darker: #870D17;
+
+    --warning: #C98B23;
+    --danger: #E11D2A;
+
+    --text: #FFFFFF;
+    --text_light: #FFFFFF;
+    --text_muted: #9AA0A6;
+
+    --border_color: #302529;
+    --highlight_color: #FF3D4B;
+
+    --input_bg: #1B1517;
+    --input_bg_hover: #241B1E;
+    --input_bg_focus: #141012;
+    --input_border: #403438;
+    --input_border_hover: #6A5B5E;
+    --input_border_focus: #E11D2A;
+
+    --button_bg: #1B1517;
+    --button_bg_hover: #302529;
+    --button_bg_down: #141012;
+    --button_bg_disabled: #141012;
+    --button_border: #302529;
+    --button_border_hover: #E11D2A;
+    --button_border_focus: #FF3D4B;
+
+    --tab_bg: #141012;
+    --tab_bg_hover: #302529;
+    --tab_bg_down: #B01420;
+    --tab_bg_disabled: #141012;
+    --tab_border: #302529;
+    --tab_border_hover: #E11D2A;
+    --tab_border_focus: #FF3D4B;
+    --tab_border_selected: #E11D2A;
+
+    --scrollbar_bg: #141012;
+    --scrollbar_handle: #403438;
+    --scrollbar_hover: #E11D2A;
+    --scrollbar_down: #B01420;
+    --scrollbar_border: #302529;
+}
+
+QDockWidget::title {
+    background-color: #141012;
+    border-bottom: 2px solid #B01420;
+}
+
+QDockWidget#previewDock::title {
+    background-color: #1B1517;
+    border-bottom: 2px solid #E11D2A;
+}
+
+QDockWidget::close-button:hover,
+QDockWidget::float-button:hover {
+    background-color: #B01420;
+}
+
+QMenu::separator {
+    background-color: #302529;
+}
+
+QToolTip {
+    background-color: #1B1517;
+    color: #FFFFFF;
+    border: 1px solid #E11D2A;
+}
+
+QLabel#levelGuideLabel {
+    background-color: #141012;
+    color: #9AA0A6;
+    border: 1px solid #403438;
+    border-radius: 3px;
+    padding: 2px 6px;
+    font-weight: 600;
+}
+
+QLabel#levelGuideLabel[levelState="low"],
+QLabel#levelGuideLabel[levelState="muted"] {
+    background-color: #141012;
+    color: #9AA0A6;
+    border-color: #403438;
+}
+
+QLabel#levelGuideLabel[levelState="good"] {
+    background-color: #14251C;
+    color: #72D39B;
+    border-color: #3FB873;
+}
+
+QLabel#levelGuideLabel[levelState="hot"] {
+    background-color: #2A2112;
+    color: #FFD166;
+    border-color: #C98B23;
+}
+
+QLabel#levelGuideLabel[levelState="unassigned"] {
+    background-color: #241B1E;
+    color: #FF7B84;
+    border-color: #E11D2A;
+}
+
+QLabel#levelGuideLabel[levelState="clip"] {
+    background-color: #E11D2A;
+    color: #FFFFFF;
+    border-color: #FF3D4B;
+}
+
+#streamButton:!hover:!pressed.state-active,
+#recordButton:!hover:!pressed.state-active,
+#pauseRecordButton:!hover:!pressed.state-active,
+#replayBufferButton:!hover:!pressed.state-active,
+#virtualCamButton:!hover:!pressed.state-active,
+#modeSwitch:!hover:!pressed.state-active,
+#broadcastButton:!hover:!pressed.state-active {
+    background-color: #B01420;
+    border-color: #E11D2A;
+}
+
+#streamButton:hover:!pressed.state-active,
+#recordButton:hover:!pressed.state-active,
+#pauseRecordButton:hover:!pressed.state-active,
+#replayBufferButton:hover:!pressed.state-active,
+#virtualCamButton:hover:!pressed.state-active,
+#modeSwitch:hover:!pressed.state-active,
+#broadcastButton:hover:!pressed.state-active {
+    background-color: #E11D2A;
+    border-color: #FF3D4B;
+}
+
+.list-grid SceneTree::item:selected {
+    background-color: #B01420;
+}
+
+.list-grid SceneTree::item:selected:hover {
+    background-color: #E11D2A;
+}

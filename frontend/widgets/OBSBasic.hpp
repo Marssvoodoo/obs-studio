@@ -83,7 +83,7 @@ enum class LogFileType;
 #define SIMPLE_ENCODER_APPLE_H264 "apple_h264"
 #define SIMPLE_ENCODER_APPLE_HEVC "apple_hevc"
 
-#define PREVIEW_EDGE_SIZE 10
+#define PREVIEW_EDGE_SIZE 0
 
 enum class ProjectorType;
 
@@ -317,6 +317,7 @@ public:
 	void closeWindow();
 
 protected:
+	bool eventFilter(QObject *watched, QEvent *event) override;
 	bool isReadyToClose();
 	bool promptToClose();
 
@@ -338,6 +339,17 @@ signals:
 	 * -------------------------------------
 	 */
 private:
+	enum class DockResizeEdge {
+		None,
+		Left,
+		Right,
+	};
+
+	DockResizeEdge dockResizeEdge = DockResizeEdge::None;
+	QPointer<QDockWidget> dockResizePinnedDock;
+	int dockResizePinnedMinWidth = -1;
+	int dockResizePinnedMaxWidth = -1;
+
 	std::shared_ptr<Auth> auth;
 
 public:
@@ -445,6 +457,7 @@ private:
 	QStringList extraCustomDockNames;
 	QList<QPointer<QDockWidget>> extraCustomDocks;
 
+	QPointer<OBSDock> previewDock;
 	QPointer<OBSDock> controlsDock;
 	QPointer<OBSDock> mixerDock;
 

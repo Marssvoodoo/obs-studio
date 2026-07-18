@@ -73,6 +73,7 @@ private:
 	float currentMagnitude[MAX_AUDIO_CHANNELS];
 	float currentPeak[MAX_AUDIO_CHANNELS];
 	float currentInputPeak[MAX_AUDIO_CHANNELS];
+	float recentPeak{-M_INFINITE};
 
 	int displayNrAudioChannels{0};
 	float displayMagnitude[MAX_AUDIO_CHANNELS];
@@ -142,6 +143,7 @@ public:
 
 	void setLevels(const float magnitude[MAX_AUDIO_CHANNELS], const float peak[MAX_AUDIO_CHANNELS],
 		       const float inputPeak[MAX_AUDIO_CHANNELS]);
+	float takeRecentPeak();
 	bool needLayoutChange();
 
 	void setVertical(bool vertical = true);

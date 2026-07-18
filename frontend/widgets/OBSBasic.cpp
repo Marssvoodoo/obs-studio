@@ -31,6 +31,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMouseEvent>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTextStream>
@@ -509,6 +510,29 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	ui->setupUi(this);
 	ui->previewDisabledWidget->setVisible(false);
 
+	/* Keep the existing editor and Studio Mode displays intact, but host
+	 * them in a native dock so the preview can be moved, resized, floated,
+	 * or hidden like the rest of the OBS workspace. */
+	QWidget *previewEditor = takeCentralWidget();
+	previewDock = new OBSDock(this);
+	previewDock->setObjectName(QStringLiteral("previewDock"));
+	previewDock->setWindowTitle(QTStr("Basic.Main.StreamPreview"));
+	previewDock->setAllowedAreas(Qt::AllDockWidgetAreas);
+	previewEditor->setMinimumSize(240, 180);
+	previewEditor->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+	previewDock->setWidget(previewEditor);
+
+	/* QMainWindow's left and right dock separators resolve against its central
+	 * item. Keep that horizontal anchor while collapsing its vertical extent,
+	 * allowing the top and bottom dock areas to meet without an empty band. */
+	QWidget *dockLayoutAnchor = new QWidget(this);
+	dockLayoutAnchor->setObjectName(QStringLiteral("dockLayoutAnchor"));
+	dockLayoutAnchor->setMinimumSize(0, 0);
+	dockLayoutAnchor->setMaximumHeight(0);
+	dockLayoutAnchor->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+	dockLayoutAnchor->setAttribute(Qt::WA_TransparentForMouseEvents);
+	setCentralWidget(dockLayoutAnchor);
+
 	/* Set up streaming connections */
 	connect(
 		this, &OBSBasic::StreamingStarting, this, [this] { this->streamingStarting = true; },
@@ -610,6 +634,7 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 
 	/* Scenes and Sources dock on left
 	 * This specific arrangement can't be set up in Qt Designer */
+	addDockWidget(Qt::TopDockWidgetArea, previewDock);
 	addDockWidget(Qt::LeftDockWidgetArea, ui->scenesDock);
 	splitDockWidget(ui->scenesDock, ui->sourcesDock, Qt::Vertical);
 	int sideDockWidth = std::min(width() * 30 / 100, 320);
@@ -703,6 +728,7 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	delete shortcutFilter;
 	shortcutFilter = CreateShortcutFilter();
 	installEventFilter(shortcutFilter);
+	qApp->installEventFilter(this);
 
 	stringstream name;
 	name << "OBS " << App()->GetVersionString();
@@ -871,6 +897,7 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	SETUP_DOCK(ui->sourcesDock);
 	SETUP_DOCK(ui->mixerDock);
 	SETUP_DOCK(ui->transitionsDock);
+	SETUP_DOCK(previewDock);
 	SETUP_DOCK(controlsDock);
 	SETUP_DOCK(statsDock);
 #undef SETUP_DOCK
@@ -1742,6 +1769,75 @@ void OBSBasic::OnFirstLoad()
 }
 
 OBSBasic::~OBSBasic() {}
+
+bool OBSBasic::eventFilter(QObject *watched, QEvent *event)
+{
+	Q_UNUSED(watched);
+
+	auto visibleDockInArea = [this](Qt::DockWidgetArea area) {
+		const auto docks = findChildren<QDockWidget *>(QString(), Qt::FindDirectChildrenOnly);
+		QDockWidget *representative = nullptr;
+		for (QDockWidget *dock : docks) {
+			if (!dock->isVisible() || dock->isFloating() || dockWidgetArea(dock) != area)
+				continue;
+			if (!representative || dock->height() > representative->height())
+				representative = dock;
+		}
+		return representative;
+	};
+
+	if (event->type() == QEvent::MouseButtonPress) {
+		auto *mouseEvent = static_cast<QMouseEvent *>(event);
+		if (mouseEvent->button() == Qt::LeftButton && dockResizeEdge == DockResizeEdge::None) {
+			QDockWidget *leftDock = visibleDockInArea(Qt::LeftDockWidgetArea);
+			QDockWidget *rightDock = visibleDockInArea(Qt::RightDockWidgetArea);
+			const int separatorExtent = style()->pixelMetric(QStyle::PM_DockWidgetSeparatorExtent, nullptr, this);
+			const QPoint mousePosition = mapFromGlobal(mouseEvent->globalPosition().toPoint());
+			const int mouseX = mousePosition.x();
+			const int mouseY = mousePosition.y();
+			const bool insideDockSpan = leftDock && rightDock && mouseY >= leftDock->geometry().top() &&
+						    mouseY <= leftDock->geometry().bottom() &&
+						    mouseY >= rightDock->geometry().top() &&
+						    mouseY <= rightDock->geometry().bottom();
+
+			if (insideDockSpan && qAbs(mouseX - leftDock->geometry().right()) <= separatorExtent) {
+				dockResizeEdge = DockResizeEdge::Left;
+			} else if (insideDockSpan && qAbs(mouseX - rightDock->geometry().left()) <= separatorExtent) {
+				dockResizeEdge = DockResizeEdge::Right;
+			}
+			if (dockResizeEdge != DockResizeEdge::None) {
+				/* Qt's outer separator can redistribute width into the
+				 * opposite side area. Pin that area only for the native
+				 * drag, then restore its normal constraints on release. */
+				dockResizePinnedDock = dockResizeEdge == DockResizeEdge::Left ? rightDock : leftDock;
+				dockResizePinnedMinWidth = dockResizePinnedDock->minimumWidth();
+				dockResizePinnedMaxWidth = dockResizePinnedDock->maximumWidth();
+				dockResizePinnedDock->setFixedWidth(dockResizePinnedDock->width());
+			}
+		}
+	}
+
+	if (event->type() == QEvent::MouseButtonRelease && dockResizeEdge != DockResizeEdge::None) {
+		const QPointer<QDockWidget> pinnedDock = dockResizePinnedDock;
+		const int pinnedMinWidth = dockResizePinnedMinWidth;
+		const int pinnedMaxWidth = dockResizePinnedMaxWidth;
+		dockResizeEdge = DockResizeEdge::None;
+		dockResizePinnedDock.clear();
+		dockResizePinnedMinWidth = -1;
+		dockResizePinnedMaxWidth = -1;
+		QMetaObject::invokeMethod(
+			this,
+			[pinnedDock, pinnedMinWidth, pinnedMaxWidth] {
+				if (pinnedDock) {
+					pinnedDock->setMinimumWidth(pinnedMinWidth);
+					pinnedDock->setMaximumWidth(pinnedMaxWidth);
+				}
+			},
+			Qt::QueuedConnection);
+	}
+
+	return false;
+}
 
 void OBSBasic::applicationShutdown() noexcept
 {

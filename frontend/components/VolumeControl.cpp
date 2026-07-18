@@ -7,12 +7,115 @@
 #include <dialogs/NameDialog.hpp>
 #include <widgets/OBSBasic.hpp>
 
+#include <QActionGroup>
+#include <QFontMetrics>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QObjectCleanupHandler>
+#include <QTimer>
+
+#include <array>
+#include <cmath>
 
 #include "moc_VolumeControl.cpp"
 
 namespace {
+enum class LevelGuideGroup {
+	Voice,
+	Program,
+	Effects,
+	General,
+};
+
+struct LevelGuideProfile {
+	const char *id;
+	const char *nameKey;
+	float lowDb;
+	float highDb;
+	LevelGuideGroup group;
+};
+
+constexpr std::array<LevelGuideProfile, 17> levelGuideProfiles{{
+	{"voice", "Basic.AudioMixer.LevelGuide.Role.Voice", -12.0f, -6.0f, LevelGuideGroup::Voice},
+	{"guest", "Basic.AudioMixer.LevelGuide.Role.Guest", -14.0f, -8.0f, LevelGuideGroup::Voice},
+	{"party_chat", "Basic.AudioMixer.LevelGuide.Role.PartyChat", -20.0f, -10.0f, LevelGuideGroup::Voice},
+	{"console_chat", "Basic.AudioMixer.LevelGuide.Role.ConsoleChat", -20.0f, -10.0f,
+	 LevelGuideGroup::Voice},
+	{"yells", "Basic.AudioMixer.LevelGuide.Role.Yells", -10.0f, -3.0f, LevelGuideGroup::Voice},
+	{"whisper", "Basic.AudioMixer.LevelGuide.Role.Whisper", -18.0f, -10.0f, LevelGuideGroup::Voice},
+	{"tts", "Basic.AudioMixer.LevelGuide.Role.TTS", -14.0f, -8.0f, LevelGuideGroup::Voice},
+	{"game", "Basic.AudioMixer.LevelGuide.Role.Game", -24.0f, -14.0f, LevelGuideGroup::Program},
+	{"desktop", "Basic.AudioMixer.LevelGuide.Role.Desktop", -24.0f, -14.0f, LevelGuideGroup::Program},
+	{"video", "Basic.AudioMixer.LevelGuide.Role.Video", -20.0f, -10.0f, LevelGuideGroup::Program},
+	{"music", "Basic.AudioMixer.LevelGuide.Role.Music", -30.0f, -20.0f, LevelGuideGroup::Program},
+	{"alerts", "Basic.AudioMixer.LevelGuide.Role.Alerts", -18.0f, -10.0f, LevelGuideGroup::Effects},
+	{"soundboard", "Basic.AudioMixer.LevelGuide.Role.Soundboard", -18.0f, -8.0f,
+	 LevelGuideGroup::Effects},
+	{"effects", "Basic.AudioMixer.LevelGuide.Role.Effects", -18.0f, -10.0f, LevelGuideGroup::Effects},
+	{"impact", "Basic.AudioMixer.LevelGuide.Role.Impact", -12.0f, -4.0f, LevelGuideGroup::Effects},
+	{"ambient", "Basic.AudioMixer.LevelGuide.Role.Ambient", -36.0f, -24.0f, LevelGuideGroup::Effects},
+	{"general", "Basic.AudioMixer.LevelGuide.Role.General", -20.0f, -10.0f, LevelGuideGroup::General},
+}};
+
+const LevelGuideProfile &getLevelGuideProfile(const QString &id)
+{
+	for (const LevelGuideProfile &profile : levelGuideProfiles) {
+		if (id == QLatin1String(profile.id))
+			return profile;
+	}
+
+	return levelGuideProfiles.back();
+}
+
+bool hasAudioPeak(float peak)
+{
+	/* libobs uses -M_INFINITE (-3.4e38f), rather than IEEE -infinity,
+	 * as its silent/uninitialized meter sentinel. */
+	return std::isfinite(peak) && peak > (-M_INFINITE / 2.0f);
+}
+
+QString inferLevelGuideRole(const QString &sourceName)
+{
+	const QString name = sourceName.toLower();
+
+	if (name.contains("ps4chat") || name.contains("console chat") || name.contains("line in at rear panel"))
+		return QStringLiteral("console_chat");
+	if (name.contains("yell") || name.contains("reaction") || name.contains("shout") || name.contains("scream"))
+		return QStringLiteral("yells");
+	if (name.contains("guest") || name.contains("co-host") || name.contains("cohost"))
+		return QStringLiteral("guest");
+	if (name.contains("tts") || name.contains("text to speech") || name.contains("voiceover"))
+		return QStringLiteral("tts");
+	if (name.contains("whisper") || name.contains("asmr"))
+		return QStringLiteral("whisper");
+	if (name.contains("discord") || name.contains("chat") || name.contains("party"))
+		return QStringLiteral("party_chat");
+	if (name.contains("microphone") || name.contains("mic ") || name.endsWith(" mic") ||
+	    name.contains("focusrite") || name.contains("scarlett") || name.contains("yeti") ||
+	    name.contains("voice"))
+		return QStringLiteral("voice");
+	if (name.contains("music") || name.contains("spotify"))
+		return QStringLiteral("music");
+	if (name.contains("game") || name.contains("ps4") || name.contains("ps5") || name.contains("xbox"))
+		return QStringLiteral("game");
+	if (name.contains("soundboard"))
+		return QStringLiteral("soundboard");
+	if (name.contains("explosion") || name.contains("impact"))
+		return QStringLiteral("impact");
+	if (name.contains("alert") || name.contains("notification"))
+		return QStringLiteral("alerts");
+	if (name.contains("sfx") || name.contains("effect"))
+		return QStringLiteral("effects");
+	if (name.contains("ambient") || name.contains("background") || name.contains("room tone"))
+		return QStringLiteral("ambient");
+	if (name.contains("video") || name.contains("dialogue") || name.contains("dialog"))
+		return QStringLiteral("video");
+	if (name.contains("desktop"))
+		return QStringLiteral("desktop");
+
+	return QStringLiteral("general");
+}
+
 bool isSourceUnassigned(obs_source_t *source)
 {
 	uint32_t mixes = (obs_source_get_audio_mixers(source) & ((1 << MAX_AUDIO_MIXES) - 1));
@@ -83,12 +186,27 @@ VolumeControl::VolumeControl(obs_source_t *source, QWidget *parent, bool vertica
 	volumeLabel->setIndent(0);
 	volumeLabel->setObjectName("volLabel");
 
+	levelGuideLabel = new QLabel(this);
+	levelGuideLabel->setObjectName("levelGuideLabel");
+	levelGuideLabel->setAlignment(Qt::AlignCenter);
+	levelGuideLabel->setTextFormat(Qt::PlainText);
+	levelGuideLabel->setCursor(Qt::PointingHandCursor);
+	levelGuideLabel->installEventFilter(this);
+	utils->addClass(levelGuideLabel, "mixer-level-guide");
+	utils->addClass(levelGuideLabel, "text-tiny");
+
 	slider = new VolumeSlider(obs_fader, Qt::Horizontal, this);
 	slider->setMinimum(0);
 	slider->setMaximum(int(FADER_PRECISION));
 
 	sourceName = obs_source_get_name(source);
 	setObjectName(sourceName);
+
+	OBSDataAutoRelease privateSettings = obs_source_get_private_settings(source);
+	levelRole = QString::fromUtf8(obs_data_get_string(privateSettings, "mixer_level_role"));
+	levelRoleAutomatic = levelRole.isEmpty();
+	if (levelRole.isEmpty())
+		levelRole = inferLevelGuideRole(sourceName);
 
 	utils->applyStateStylingEventFilter(muteButton);
 	utils->applyStateStylingEventFilter(monitorButton);
@@ -102,6 +220,12 @@ VolumeControl::VolumeControl(obs_source_t *source, QWidget *parent, bool vertica
 
 	setLayoutVertical(vertical);
 	setName(sourceName);
+	updateLevelGuide();
+
+	QTimer *levelTimer = new QTimer(this);
+	levelTimer->setInterval(250);
+	connect(levelTimer, &QTimer::timeout, this, &VolumeControl::updateLevelGuide);
+	levelTimer->start();
 
 	obs_fader_add_callback(obs_fader, obsVolumeChanged, this);
 
@@ -258,6 +382,13 @@ void VolumeControl::setLayoutVertical(bool vertical)
 
 		nameButton->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Preferred);
 		categoryLabel->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Preferred);
+		/* Ignore changing text size hints so live peaks never resize a
+		 * vertical mixer strip. */
+		levelGuideLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+		levelGuideLabel->setMinimumWidth(0);
+		levelGuideLabel->setMaximumWidth(QWIDGETSIZE_MAX);
+		levelGuideLabel->setFixedHeight(34);
+		levelGuideLabel->setWordWrap(false);
 		volumeLabel->setAlignment(Qt::AlignLeft);
 
 		categoryLayout->setAlignment(Qt::AlignCenter);
@@ -297,6 +428,7 @@ void VolumeControl::setLayoutVertical(bool vertical)
 
 		newLayout->addItem(categoryLayout);
 		newLayout->addItem(nameLayout);
+		newLayout->addWidget(levelGuideLabel);
 		newLayout->addItem(volLayout);
 		newLayout->addWidget(meterFrame);
 		newLayout->addItem(controlLayout);
@@ -304,8 +436,9 @@ void VolumeControl::setLayoutVertical(bool vertical)
 		newLayout->setStretch(0, 0);
 		newLayout->setStretch(1, 0);
 		newLayout->setStretch(2, 0);
-		newLayout->setStretch(3, 1);
-		newLayout->setStretch(4, 0);
+		newLayout->setStretch(3, 0);
+		newLayout->setStretch(4, 1);
+		newLayout->setStretch(5, 0);
 
 		volumeMeter->setFocusProxy(slider);
 	} else {
@@ -327,6 +460,10 @@ void VolumeControl::setLayoutVertical(bool vertical)
 
 		nameButton->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Preferred);
 		categoryLabel->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+		levelGuideLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+		levelGuideLabel->setFixedWidth(220);
+		levelGuideLabel->setFixedHeight(24);
+		levelGuideLabel->setWordWrap(false);
 		volumeLabel->setAlignment(Qt::AlignRight);
 
 		QHBoxLayout *textSubLayout = new QHBoxLayout;
@@ -362,9 +499,11 @@ void VolumeControl::setLayoutVertical(bool vertical)
 		controlLayout->addWidget(meterFrame);
 
 		newLayout->addItem(textLayout);
+		newLayout->addWidget(levelGuideLabel);
 		newLayout->addItem(controlLayout);
 		newLayout->setStretch(0, 3);
-		newLayout->setStretch(1, 6);
+		newLayout->setStretch(1, 0);
+		newLayout->setStretch(2, 6);
 
 		volumeMeter->setFocusProxy(slider);
 	}
@@ -414,6 +553,8 @@ void VolumeControl::showVolumeControlMenu(QPoint pos)
 
 	QAction *filtersAction = new QAction(QTStr("Filters"), popup);
 	QAction *propertiesAction = new QAction(QTStr("Properties"), popup);
+
+	QMenu *levelGuideMenu = createLevelGuideMenu(popup);
 
 	// Set properties on actions that require source reference
 	hideAction->setProperty("source", QVariant::fromValue<OBSSource>(source));
@@ -465,6 +606,7 @@ void VolumeControl::showVolumeControlMenu(QPoint pos)
 	popup->addAction(pinAction);
 	popup->addAction(hideAction);
 	popup->addAction(lockAction);
+	popup->addMenu(levelGuideMenu);
 
 	popup->addSeparator();
 	popup->addAction(copyFiltersAction);
@@ -501,6 +643,74 @@ void VolumeControl::showVolumeControlMenu(QPoint pos)
 	popup->popup(popupPos);
 
 	connect(popup, &QMenu::aboutToHide, popup, &QMenu::deleteLater);
+}
+
+QMenu *VolumeControl::createLevelGuideMenu(QWidget *parent)
+{
+	QMenu *menu = new QMenu(QTStr("Basic.AudioMixer.LevelGuide.Menu"), parent);
+	QActionGroup *actionGroup = new QActionGroup(menu);
+	actionGroup->setExclusive(true);
+
+	QAction *autoAction = menu->addAction(QTStr("Basic.AudioMixer.LevelGuide.Role.AutoSource"));
+	autoAction->setCheckable(true);
+	autoAction->setChecked(levelRoleAutomatic);
+	actionGroup->addAction(autoAction);
+	connect(autoAction, &QAction::triggered, this, &VolumeControl::setAutomaticLevelRole);
+	menu->addSeparator();
+
+	QMenu *voiceMenu = menu->addMenu(QTStr("Basic.AudioMixer.LevelGuide.Group.Voice"));
+	QMenu *programMenu = menu->addMenu(QTStr("Basic.AudioMixer.LevelGuide.Group.Program"));
+	QMenu *effectsMenu = menu->addMenu(QTStr("Basic.AudioMixer.LevelGuide.Group.Effects"));
+
+	for (const LevelGuideProfile &profile : levelGuideProfiles) {
+		QMenu *targetMenu = menu;
+		switch (profile.group) {
+		case LevelGuideGroup::Voice:
+			targetMenu = voiceMenu;
+			break;
+		case LevelGuideGroup::Program:
+			targetMenu = programMenu;
+			break;
+		case LevelGuideGroup::Effects:
+			targetMenu = effectsMenu;
+			break;
+		case LevelGuideGroup::General:
+			break;
+		}
+
+		if (profile.group == LevelGuideGroup::General)
+			menu->addSeparator();
+
+		QAction *roleAction = targetMenu->addAction(QTStr(profile.nameKey));
+		roleAction->setCheckable(true);
+		roleAction->setChecked(!levelRoleAutomatic && levelRole == QLatin1String(profile.id));
+		actionGroup->addAction(roleAction);
+		connect(roleAction, &QAction::triggered, this,
+			[this, role = QString::fromLatin1(profile.id)]() { setLevelRole(role); });
+	}
+
+	return menu;
+}
+
+void VolumeControl::showLevelGuideMenu()
+{
+	QMenu *menu = createLevelGuideMenu(this);
+	const QPoint menuPos = levelGuideLabel->mapToGlobal(QPoint(0, levelGuideLabel->height()));
+	menu->popup(menuPos);
+	connect(menu, &QMenu::aboutToHide, menu, &QMenu::deleteLater);
+}
+
+bool VolumeControl::eventFilter(QObject *watched, QEvent *event)
+{
+	if (watched == levelGuideLabel && event->type() == QEvent::MouseButtonRelease) {
+		auto *mouseEvent = static_cast<QMouseEvent *>(event);
+		if (mouseEvent->button() == Qt::LeftButton || mouseEvent->button() == Qt::RightButton) {
+			showLevelGuideMenu();
+			return true;
+		}
+	}
+
+	return QFrame::eventFilter(watched, event);
 }
 
 void VolumeControl::renameSource()
@@ -664,6 +874,138 @@ void VolumeControl::updatePeakMeterType()
 	}
 
 	setPeakMeterType(peakMeterType);
+}
+
+void VolumeControl::setLevelRole(const QString &role, bool persist)
+{
+	const LevelGuideProfile &profile = getLevelGuideProfile(role);
+	levelRole = QString::fromLatin1(profile.id);
+	levelRoleAutomatic = false;
+	heldGuidePeak = -M_INFINITE;
+	levelGuideHoldTicks = 0;
+
+	if (persist) {
+		OBSSource source = OBSGetStrongRef(weakSource());
+		if (source) {
+			OBSDataAutoRelease privateSettings = obs_source_get_private_settings(source);
+			obs_data_set_string(privateSettings, "mixer_level_role", profile.id);
+		}
+	}
+
+	updateLevelGuide();
+}
+
+void VolumeControl::setAutomaticLevelRole()
+{
+	levelRole = inferLevelGuideRole(sourceName);
+	levelRoleAutomatic = true;
+	heldGuidePeak = -M_INFINITE;
+	levelGuideHoldTicks = 0;
+
+	OBSSource source = OBSGetStrongRef(weakSource());
+	if (source) {
+		OBSDataAutoRelease privateSettings = obs_source_get_private_settings(source);
+		obs_data_erase(privateSettings, "mixer_level_role");
+	}
+
+	updateLevelGuide();
+}
+
+void VolumeControl::updateLevelGuide()
+{
+	if (!volumeMeter || !levelGuideLabel)
+		return;
+
+	OBSSource source = OBSGetStrongRef(weakSource());
+	if (!source)
+		return;
+
+	const float recentPeak = volumeMeter->takeRecentPeak();
+	if (hasAudioPeak(recentPeak)) {
+		if (!hasAudioPeak(heldGuidePeak) || recentPeak >= heldGuidePeak || levelGuideHoldTicks <= 0) {
+			heldGuidePeak = recentPeak;
+			levelGuideHoldTicks = 4;
+		} else {
+			--levelGuideHoldTicks;
+		}
+	} else if (levelGuideHoldTicks > 0) {
+		--levelGuideHoldTicks;
+	} else {
+		heldGuidePeak = -M_INFINITE;
+	}
+
+	const LevelGuideProfile &profile = getLevelGuideProfile(levelRole);
+	const bool roleUnassigned = levelRoleAutomatic && levelRole == QStringLiteral("general");
+	QString roleName = roleUnassigned ? QTStr("Basic.AudioMixer.LevelGuide.Role.Unassigned")
+					  : QTStr(profile.nameKey);
+	if (levelRoleAutomatic && !roleUnassigned)
+		roleName = QTStr("Basic.AudioMixer.LevelGuide.Role.Auto").arg(roleName);
+	QString state;
+	QString stateText;
+	QString peakText;
+
+	if (roleUnassigned) {
+		state = QStringLiteral("unassigned");
+		stateText = QTStr("Basic.AudioMixer.LevelGuide.State.SetRole");
+		if (hasAudioPeak(heldGuidePeak))
+			peakText = QStringLiteral("%1 dBFS").arg(QString::number(heldGuidePeak, 'f', 1));
+	} else if (obs_source_muted(source)) {
+		state = QStringLiteral("muted");
+		stateText = QTStr("Basic.AudioMixer.LevelGuide.State.Muted");
+	} else if (!hasAudioPeak(heldGuidePeak)) {
+		state = QStringLiteral("low");
+		stateText = QTStr("Basic.AudioMixer.LevelGuide.State.Low");
+		peakText = QStringLiteral("-inf dBFS");
+	} else {
+		peakText = QStringLiteral("%1 dBFS").arg(QString::number(heldGuidePeak, 'f', 1));
+		if (heldGuidePeak >= -0.1f) {
+			state = QStringLiteral("clip");
+			stateText = QTStr("Basic.AudioMixer.LevelGuide.State.Clip");
+		} else if (heldGuidePeak > profile.highDb) {
+			state = QStringLiteral("hot");
+			stateText = QTStr("Basic.AudioMixer.LevelGuide.State.Hot");
+		} else if (heldGuidePeak >= profile.lowDb) {
+			state = QStringLiteral("good");
+			stateText = QTStr("Basic.AudioMixer.LevelGuide.State.Good");
+		} else {
+			state = QStringLiteral("low");
+			stateText = QTStr("Basic.AudioMixer.LevelGuide.State.Low");
+		}
+	}
+
+	QString text;
+	const QFontMetrics fontMetrics(levelGuideLabel->font());
+	const int availableTextWidth = std::max(40, levelGuideLabel->width() - 16);
+	if (vertical) {
+		const QString roleLine = fontMetrics.elidedText(roleName, Qt::ElideRight, availableTextWidth);
+		const QString statusLine = peakText.isEmpty() ? stateText
+							      : QStringLiteral("%1  %2").arg(stateText, peakText);
+		text = QStringLiteral("%1\n%2")
+			       .arg(roleLine, fontMetrics.elidedText(statusLine, Qt::ElideRight, availableTextWidth));
+	} else {
+		const QString fullText = peakText.isEmpty() ? QStringLiteral("%1  \u2022  %2").arg(roleName, stateText)
+							    : QStringLiteral("%1  \u2022  %2  %3")
+								      .arg(roleName, stateText, peakText);
+		text = fontMetrics.elidedText(fullText, Qt::ElideRight, availableTextWidth);
+	}
+
+	const QString tooltip =
+		roleUnassigned
+			? QTStr("Basic.AudioMixer.LevelGuide.Tooltip.Unassigned")
+			: QTStr("Basic.AudioMixer.LevelGuide.Tooltip")
+				  .arg(QString::number(profile.lowDb, 'f', 0),
+				       QString::number(profile.highDb, 'f', 0));
+	if (levelGuideLabel->text() != text)
+		levelGuideLabel->setText(text);
+	levelGuideLabel->setToolTip(tooltip);
+	levelGuideLabel->setAccessibleName(text);
+	levelGuideLabel->setAccessibleDescription(tooltip);
+
+	if (levelGuideLabel->property("levelState").toString() != state) {
+		levelGuideLabel->setProperty("levelState", state);
+		levelGuideLabel->style()->unpolish(levelGuideLabel);
+		levelGuideLabel->style()->polish(levelGuideLabel);
+	}
 }
 
 void VolumeControl::setMuted(bool mute)
@@ -902,6 +1244,7 @@ void VolumeControl::setVertical(bool vertical_)
 	vertical = vertical_;
 
 	setLayoutVertical(vertical);
+	updateLevelGuide();
 }
 
 void VolumeControl::updateTabOrder()
