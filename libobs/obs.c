@@ -993,6 +993,18 @@ static bool obs_init_audio(struct audio_output_info *ai)
 	return false;
 }
 
+static void clear_monitoring_duplication_source(struct obs_core_audio *audio)
+{
+	obs_source_t *source = audio->monitoring_duplicating_source;
+	if (!source)
+		return;
+
+	/* Clear the field before releasing the source so destruction callbacks
+	 * cannot observe a stale pointer. */
+	audio->monitoring_duplicating_source = NULL;
+	obs_source_release(source);
+}
+
 static void stop_audio(void)
 {
 	struct obs_core_audio *audio = &obs->audio;
@@ -1001,6 +1013,12 @@ static void stop_audio(void)
 		audio_output_close(audio->audio);
 		audio->audio = NULL;
 	}
+
+	/* The monitoring-deduplication reference can be the last owner of an
+	 * Audio Output Capture source. Release it while source tables and the
+	 * capture plug-in are still alive, ensuring WASAPI has stopped before
+	 * shutdown starts freeing OBS context data. */
+	clear_monitoring_duplication_source(audio);
 }
 
 static void obs_free_audio(void)
@@ -1065,11 +1083,8 @@ static void obs_free_audio(void)
 		render_pool = NULL;
 	}
 
-	/* Release the ref we hold on the dedup source so it can be destroyed. */
-	if (audio->monitoring_duplicating_source) {
-		obs_source_release(audio->monitoring_duplicating_source);
-		audio->monitoring_duplicating_source = NULL;
-	}
+	/* Audio resets do not call stop_audio(), so retain this fallback. */
+	clear_monitoring_duplication_source(audio);
 
 	deque_free(&audio->buffered_timestamps);
 	for (size_t i = 0; i < audio->render_order.num; i++)
