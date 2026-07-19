@@ -16,6 +16,7 @@
 ******************************************************************************/
 
 #include "PluginManagerWindow.hpp"
+#include "AudioPluginScanPanel.hpp"
 
 #include <OBSApp.hpp>
 
@@ -61,11 +62,18 @@ PluginManagerWindow::PluginManagerWindow(std::vector<ModuleInfo> const &modules,
 	QListWidgetItem *installed = new QListWidgetItem(QTStr("PluginManager.Section.Manage"));
 	ui->sectionList->addItem(installed);
 
+	audioSection = new QListWidgetItem(QTStr("PluginManager.Section.Audio"));
+	ui->sectionList->addItem(audioSection);
+
 	QListWidgetItem *updates = new QListWidgetItem(QTStr("PluginManager.Section.Updates"));
 	updates->setFlags(updates->flags() & ~Qt::ItemIsEnabled);
 	updates->setFlags(updates->flags() & ~Qt::ItemIsSelectable);
 	updates->setToolTip(QTStr("ComingSoon"));
 	ui->sectionList->addItem(updates);
+
+	audioScanPanel = new AudioPluginScanPanel(ui->frame);
+	ui->horizontalLayout->addWidget(audioScanPanel, 4);
+	audioScanPanel->setVisible(false);
 
 	setSection(ui->sectionList->indexFromItem(installed));
 
@@ -156,9 +164,14 @@ void PluginManagerWindow::sectionSelectionChanged()
 
 void PluginManagerWindow::setSection(QPersistentModelIndex index)
 {
-	if (ui->sectionList->itemFromIndex(index)) {
+	if (QListWidgetItem *item = ui->sectionList->itemFromIndex(index)) {
 		activeSectionIndex = index;
 		ui->sectionList->setCurrentIndex(index);
+		const bool showAudio = item == audioSection;
+		ui->modulesFrame->setVisible(!showAudio);
+		audioScanPanel->setVisible(showAudio);
+		if (showAudio)
+			resize(std::max(width(), 1120), std::max(height(), 720));
 	}
 }
 

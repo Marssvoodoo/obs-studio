@@ -961,6 +961,7 @@
      </property>
      <addaction name="applyStandardDockLayout"/>
      <addaction name="applyBalancedDockLayout"/>
+     <addaction name="applyFourTwoDockLayout"/>
     </widget>
     <addaction name="lockDocks"/>
     <addaction name="sideDocks"/>
@@ -2073,6 +2074,11 @@
   <action name="applyBalancedDockLayout">
    <property name="text">
     <string>Basic.MainMenu.Docks.Layout.Balanced666</string>
+   </property>
+  </action>
+  <action name="applyFourTwoDockLayout">
+   <property name="text">
+    <string>Basic.MainMenu.Docks.Layout.FourTwo</string>
    </property>
   </action>
   <action name="lockDocks">

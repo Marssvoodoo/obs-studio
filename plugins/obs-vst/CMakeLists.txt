@@ -26,6 +26,8 @@ target_sources(
     headers/vst-plugin-callbacks.hpp
     headers/VSTPlugin.h
     obs-vst.cpp
+    VST2ScanCache.cpp
+    VST2ScanCache.hpp
     vst_header/aeffectx.h
     VSTPlugin.cpp
 )
@@ -43,6 +45,13 @@ target_link_libraries(
 
 if(OS_WINDOWS)
   set_property(TARGET obs-vst APPEND PROPERTY AUTORCC_OPTIONS --format-version 1)
+
+  add_executable(obs-vst2-scanner)
+  target_sources(obs-vst2-scanner PRIVATE vst2-scanner-main.cpp VST2ScanCache.cpp VST2ScanCache.hpp)
+  target_include_directories(obs-vst2-scanner PRIVATE vst_header)
+  target_link_libraries(obs-vst2-scanner PRIVATE OBS::libobs)
+  set_target_properties_obs(obs-vst2-scanner PROPERTIES FOLDER plugins/obs-vst)
+  add_dependencies(obs-vst obs-vst2-scanner)
 endif()
 
 set_target_properties_obs(

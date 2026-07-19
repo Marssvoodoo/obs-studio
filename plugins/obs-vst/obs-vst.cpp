@@ -17,7 +17,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 *****************************************************************************/
 
 #include "headers/VSTPlugin.h"
+#include "VST2ScanCache.hpp"
 #include <QCryptographicHash>
+#include <QFileInfo>
 
 #define OPEN_VST_SETTINGS "open_vst_settings"
 #define CLOSE_VST_SETTINGS "close_vst_settings"
@@ -158,8 +160,46 @@ static struct obs_audio_data *vst_filter_audio(void *data, struct obs_audio_data
 	return audio;
 }
 
-static void fill_out_plugins(obs_property_t *list)
+static void fill_out_plugins(obs_property_t *list, void *data)
 {
+#ifdef _WIN32
+	obs_property_list_add_string(list, obs_module_text("SelectPlugin"), nullptr);
+
+	std::vector<VST2ScanResult> results;
+	char *cachePath = obs_module_config_path("vst2scan-results.json");
+	const bool loaded = cachePath && vst2_scan_results_load(cachePath, results, true);
+	bfree(cachePath);
+
+	std::sort(results.begin(), results.end(), [](const VST2ScanResult &left, const VST2ScanResult &right) {
+		return QString::localeAwareCompare(QString::fromUtf8(left.name), QString::fromUtf8(right.name)) < 0;
+	});
+
+	const std::string currentPath = data ? static_cast<VSTPlugin *>(data)->getEffectPath() : std::string{};
+	bool currentFound = currentPath.empty();
+	int passed = 0;
+	for (const VST2ScanResult &result : results) {
+		if (result.status != "passed")
+			continue;
+		QString label = QString::fromUtf8(result.name);
+		if (!result.vendor.empty())
+			label += QStringLiteral(" — ") + QString::fromUtf8(result.vendor);
+		obs_property_list_add_string(list, label.toUtf8().constData(), result.path.c_str());
+		currentFound = currentFound || currentPath == result.path;
+		++passed;
+	}
+
+	if (!currentFound) {
+		const QString label = QStringLiteral("%1 (%2)").arg(
+			QFileInfo(QString::fromUtf8(currentPath)).completeBaseName(), obs_module_text("CurrentPlugin"));
+		obs_property_list_add_string(list, label.toUtf8().constData(), currentPath.c_str());
+	}
+
+	if (!loaded || passed == 0) {
+		const size_t index =
+			obs_property_list_add_string(list, obs_module_text("ScanPluginsInManager"), nullptr);
+		obs_property_list_item_disable(list, index, true);
+	}
+#else
 	QStringList dir_list;
 
 #ifdef __APPLE__
@@ -258,12 +298,13 @@ static void fill_out_plugins(obs_property_t *list)
 	std::stable_sort(vst_list.begin(), vst_list.end(), std::less<QString>());
 
 	// Now add said list to the plug-in list of OBS
-	obs_property_list_add_string(list, "{Please select a plug-in}", nullptr);
+	obs_property_list_add_string(list, obs_module_text("SelectPlugin"), nullptr);
 	for (int b = 0; b < vst_list.size(); ++b) {
 		QString vst_sorted = vst_list[b];
 		obs_property_list_add_string(list, vst_sorted.left(vst_sorted.indexOf('=')).toStdString().c_str(),
 					     vst_sorted.mid(vst_sorted.indexOf('=') + 1).toStdString().c_str());
 	}
+#endif
 }
 
 static bool vst_changed(void *data, obs_properties_t *props, obs_property_t *list, obs_data_t *settings)
@@ -298,7 +339,7 @@ static obs_properties_t *vst_properties(void *data)
 	obs_property_t *list = obs_properties_add_list(props, "plugin_path", PLUG_IN_NAME, OBS_COMBO_TYPE_LIST,
 						       OBS_COMBO_FORMAT_STRING);
 
-	fill_out_plugins(list);
+	fill_out_plugins(list, data);
 
 	obs_properties_add_button2(props, OPEN_VST_SETTINGS, OPEN_VST_TEXT, open_editor_button_clicked, data);
 	obs_properties_add_button2(props, CLOSE_VST_SETTINGS, CLOSE_VST_TEXT, close_editor_button_clicked, data);

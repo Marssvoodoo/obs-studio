@@ -155,7 +155,7 @@ static bool vst3_cache_save(const VST3Scanner &scanner)
 	if (!filepath) {
 		return false;
 	}
-	const bool saved = vst3_list_save_json(scanner, filepath, "bak", false);
+	const bool saved = vst3_list_save_json(scanner, filepath, "bak", true);
 	bfree(filepath);
 	return saved;
 }
@@ -163,9 +163,16 @@ static bool vst3_cache_save(const VST3Scanner &scanner)
 static bool vst3_cache_load(VST3Scanner &scanner)
 {
 	char *path = obs_module_config_path("vst3list.json");
-	const bool loaded = vst3_list_load_json(scanner, path, true, false);
+	const bool loaded = vst3_list_load_json(scanner, path, true, true);
 	bfree(path);
 	return loaded;
+}
+
+static void vst3_cache_refresh()
+{
+	auto scanner = std::make_shared<VST3Scanner>();
+	if (vst3_cache_load(*scanner))
+		std::atomic_store(&vst3_list, std::move(scanner));
 }
 
 #ifdef _WIN32
@@ -329,6 +336,24 @@ bool retrieve_vst3_list()
 	auto cachedScanner = std::make_shared<VST3Scanner>();
 	const bool loadedFromCache = vst3_cache_load(*cachedScanner);
 	std::atomic_store(&vst3_list, cachedScanner);
+	if (loadedFromCache) {
+		vst3_scan_done.store(true, std::memory_order_release);
+		blog(LOG_INFO,
+		     "[VST3 Scanner] Loaded %zu cached plug-ins; use Tools > Plugin Manager > Audio Plug-ins to rescan",
+		     cachedScanner->pluginList.size());
+		return true;
+	}
+#ifdef _WIN32
+	char *helperPath = os_get_executable_path_ptr("obs-vst3-scanner.exe");
+	const bool manualScannerAvailable = helperPath && os_file_exists(helperPath);
+	bfree(helperPath);
+	if (manualScannerAvailable) {
+		vst3_scan_done.store(true, std::memory_order_release);
+		blog(LOG_INFO,
+		     "[VST3 Scanner] No cache is available; use Tools > Plugin Manager > Audio Plug-ins to scan");
+		return true;
+	}
+#endif
 
 	// Third-party binaries are enumerated by a supervised helper so a broken plug-in cannot take OBS down with it.
 	try {
@@ -1513,6 +1538,7 @@ bool on_vst3_changed_cb(void *priv, obs_properties_t *props, obs_property_t *pro
 
 static obs_properties_t *vst3_properties(void *data)
 {
+	vst3_cache_refresh();
 	auto vd = (struct vst3_audio_data *)data;
 	obs_properties_t *props = obs_properties_create();
 	obs_property_t *sources;

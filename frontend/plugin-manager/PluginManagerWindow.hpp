@@ -25,6 +25,8 @@
 
 namespace OBS {
 
+class AudioPluginScanPanel;
+
 class PluginManagerWindow : public QDialog {
 	Q_OBJECT
 	std::unique_ptr<Ui::PluginManagerWindow> ui;
@@ -35,6 +37,8 @@ public:
 
 private:
 	std::vector<ModuleInfo> modules_;
+	AudioPluginScanPanel *audioScanPanel = nullptr;
+	QListWidgetItem *audioSection = nullptr;
 
 	void sectionSelectionChanged();
 	QPersistentModelIndex activeSectionIndex;

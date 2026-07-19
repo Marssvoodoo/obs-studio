@@ -1,6 +1,8 @@
 target_sources(
   obs-studio
   PRIVATE
+    plugin-manager/AudioPluginScanPanel.cpp
+    plugin-manager/AudioPluginScanPanel.hpp
     plugin-manager/PluginManager.cpp
     plugin-manager/PluginManager.hpp
     plugin-manager/PluginManagerWindow.cpp

@@ -21,6 +21,99 @@
 
 #include <qt-wrappers.hpp>
 
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QHBoxLayout>
+#include <QInputDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QMenu>
+#include <QPushButton>
+#include <QVBoxLayout>
+
+#include <algorithm>
+
+namespace {
+constexpr char CUSTOM_DOCK_LAYOUTS_KEY[] = "CustomDockLayouts";
+constexpr qsizetype MAX_CUSTOM_DOCK_LAYOUTS = 64;
+constexpr qsizetype MAX_DOCK_STATE_BYTES = 4 * 1024 * 1024;
+
+struct DockLayoutRecord {
+	QString name;
+	QByteArray state;
+};
+
+bool ValidDockLayoutName(const QString &name)
+{
+	if (name.isEmpty() || name.size() > 64)
+		return false;
+
+	for (const QChar character : name) {
+		if (character.isNull() || character.category() == QChar::Other_Control)
+			return false;
+	}
+	return true;
+}
+
+QList<DockLayoutRecord> LoadCustomDockLayouts()
+{
+	QList<DockLayoutRecord> layouts;
+	const char *stored = config_get_string(App()->GetUserConfig(), "BasicWindow", CUSTOM_DOCK_LAYOUTS_KEY);
+	if (!stored || !*stored)
+		return layouts;
+
+	QJsonParseError error;
+	const QJsonDocument document = QJsonDocument::fromJson(QByteArray(stored), &error);
+	if (error.error != QJsonParseError::NoError || !document.isArray())
+		return layouts;
+
+	const QJsonArray array = document.array();
+	for (const QJsonValue &value : array) {
+		if (layouts.size() >= MAX_CUSTOM_DOCK_LAYOUTS || !value.isObject())
+			break;
+
+		const QJsonObject object = value.toObject();
+		const QString name = object.value(QStringLiteral("name")).toString().simplified();
+		const QByteArray state =
+			QByteArray::fromBase64(object.value(QStringLiteral("state")).toString().toLatin1());
+		if (!ValidDockLayoutName(name) || state.isEmpty() || state.size() > MAX_DOCK_STATE_BYTES)
+			continue;
+
+		const auto duplicate =
+			std::find_if(layouts.cbegin(), layouts.cend(), [&name](const DockLayoutRecord &item) {
+				return item.name.compare(name, Qt::CaseInsensitive) == 0;
+			});
+		if (duplicate == layouts.cend())
+			layouts.push_back({name, state});
+	}
+	return layouts;
+}
+
+void SaveCustomDockLayouts(const QList<DockLayoutRecord> &layouts)
+{
+	QJsonArray array;
+	for (const DockLayoutRecord &layout : layouts) {
+		if (array.size() >= MAX_CUSTOM_DOCK_LAYOUTS || !ValidDockLayoutName(layout.name) ||
+		    layout.state.isEmpty() || layout.state.size() > MAX_DOCK_STATE_BYTES) {
+			continue;
+		}
+
+		QJsonObject object;
+		object.insert(QStringLiteral("name"), layout.name);
+		object.insert(QStringLiteral("state"), QString::fromLatin1(layout.state.toBase64()));
+		array.push_back(object);
+	}
+
+	const QByteArray json = QJsonDocument(array).toJson(QJsonDocument::Compact);
+	config_set_string(App()->GetUserConfig(), "BasicWindow", CUSTOM_DOCK_LAYOUTS_KEY, json.constData());
+	config_save_safe(App()->GetUserConfig(), "tmp", nullptr);
+}
+} // namespace
+
 void setupDockAction(QDockWidget *dock)
 {
 	QAction *action = dock->toggleViewAction();
@@ -166,6 +259,272 @@ void OBSBasic::on_applyBalancedDockLayout_triggered()
 		resizeDocks({ui->scenesDock, previewDock, rightAnchor}, {third, third, third}, Qt::Horizontal);
 
 	activateWindow();
+}
+
+void OBSBasic::on_applyFourTwoDockLayout_triggered()
+{
+	QList<QDockWidget *> auxiliaryDocks;
+	QDockWidget *preferredDock = nullptr;
+	int preferredX = 0;
+	auto rememberVisible = [&auxiliaryDocks, &preferredDock, &preferredX](QDockWidget *dock) {
+		if (!dock || !dock->isVisible())
+			return;
+
+		auxiliaryDocks.push_back(dock);
+		if (!dock->visibleRegion().isEmpty()) {
+			const int dockX = dock->mapToGlobal(dock->rect().center()).x();
+			if (!preferredDock || dockX > preferredX) {
+				preferredDock = dock;
+				preferredX = dockX;
+			}
+		}
+	};
+
+	for (const auto &dock : extraDocks)
+		rememberVisible(dock.get());
+	for (const auto &dock : extraCustomDocks)
+		rememberVisible(dock.data());
+#ifdef BROWSER_AVAILABLE
+	for (const auto &dock : extraBrowserDocks)
+		rememberVisible(dock.get());
+#endif
+
+	on_resetDocks_triggered(true);
+	setDockCornersVertical(true);
+	ui->sideDocks->setChecked(true);
+
+	const QList<QDockWidget *> primaryDocks{ui->scenesDock,      ui->sourcesDock,    ui->mixerDock,
+						ui->transitionsDock, previewDock.data(), controlsDock.data(),
+						statsDock.data()};
+	for (QDockWidget *dock : primaryDocks)
+		removeDockWidget(dock);
+
+	addDockWidget(Qt::TopDockWidgetArea, previewDock);
+	addDockWidget(Qt::BottomDockWidgetArea, ui->scenesDock);
+	splitDockWidget(ui->scenesDock, ui->sourcesDock, Qt::Horizontal);
+	splitDockWidget(ui->sourcesDock, ui->mixerDock, Qt::Horizontal);
+	splitDockWidget(ui->mixerDock, ui->transitionsDock, Qt::Horizontal);
+	addDockWidget(Qt::BottomDockWidgetArea, controlsDock);
+	tabifyDockWidget(ui->transitionsDock, controlsDock);
+
+	addDockWidget(Qt::RightDockWidgetArea, statsDock);
+
+	for (QDockWidget *dock : primaryDocks) {
+		dock->setFloating(false);
+		dock->setVisible(true);
+	}
+
+	QDockWidget *rightTab = statsDock;
+	for (QDockWidget *dock : auxiliaryDocks) {
+		removeDockWidget(dock);
+		addDockWidget(Qt::RightDockWidgetArea, dock);
+		dock->setFloating(false);
+		dock->setVisible(true);
+		tabifyDockWidget(rightTab, dock);
+		rightTab = dock;
+	}
+	if (preferredDock)
+		preferredDock->raise();
+	else
+		statsDock->raise();
+
+	resizeDocks({ui->scenesDock, ui->sourcesDock, ui->mixerDock, ui->transitionsDock}, {2, 2, 4, 2},
+		    Qt::Horizontal);
+	resizeDocks({previewDock, ui->scenesDock}, {4, 2}, Qt::Vertical);
+	resizeDocks({previewDock, statsDock}, {4, 2}, Qt::Horizontal);
+	controlsDock->raise();
+
+	activateWindow();
+}
+
+void OBSBasic::SetupDockLayoutMenu()
+{
+	ui->dockLayoutsMenu->addSeparator();
+
+	QAction *saveAction = ui->dockLayoutsMenu->addAction(QTStr("Basic.MainMenu.Docks.Layout.Save"));
+	connect(saveAction, &QAction::triggered, this, &OBSBasic::SaveCustomDockLayout);
+
+	customDockLayoutsMenu = ui->dockLayoutsMenu->addMenu(QTStr("Basic.MainMenu.Docks.Layout.Custom"));
+	RefreshCustomDockLayoutsMenu();
+
+	QAction *manageAction = ui->dockLayoutsMenu->addAction(QTStr("Basic.MainMenu.Docks.Layout.Manage"));
+	connect(manageAction, &QAction::triggered, this, &OBSBasic::ManageCustomDockLayouts);
+}
+
+void OBSBasic::RefreshCustomDockLayoutsMenu()
+{
+	if (!customDockLayoutsMenu)
+		return;
+
+	customDockLayoutsMenu->clear();
+	const QList<DockLayoutRecord> layouts = LoadCustomDockLayouts();
+	if (layouts.isEmpty()) {
+		QAction *emptyAction =
+			customDockLayoutsMenu->addAction(QTStr("Basic.MainMenu.Docks.Layout.Custom.Empty"));
+		emptyAction->setEnabled(false);
+		return;
+	}
+
+	for (const DockLayoutRecord &layout : layouts) {
+		QAction *action = customDockLayoutsMenu->addAction(layout.name);
+		action->setData(layout.name);
+		connect(action, &QAction::triggered, this,
+			[this, action]() { ApplyCustomDockLayout(action->data().toString()); });
+	}
+}
+
+void OBSBasic::SaveCustomDockLayout()
+{
+	bool accepted = false;
+	QString name = QInputDialog::getText(this, QTStr("Basic.MainMenu.Docks.Layout.Save.Title"),
+					     QTStr("Basic.MainMenu.Docks.Layout.Save.Name"), QLineEdit::Normal, {},
+					     &accepted)
+			       .simplified();
+	if (!accepted)
+		return;
+	if (!ValidDockLayoutName(name)) {
+		OBSMessageBox::warning(this, QTStr("Basic.MainMenu.Docks.Layout.Save.Title"),
+				       QTStr("Basic.MainMenu.Docks.Layout.Save.Invalid"));
+		return;
+	}
+
+	QList<DockLayoutRecord> layouts = LoadCustomDockLayouts();
+	auto existing = std::find_if(layouts.begin(), layouts.end(), [&name](const DockLayoutRecord &layout) {
+		return layout.name.compare(name, Qt::CaseInsensitive) == 0;
+	});
+	if (existing != layouts.end()) {
+		const auto choice = OBSMessageBox::question(this,
+							    QTStr("Basic.MainMenu.Docks.Layout.Save.Replace.Title"),
+							    QTStr("Basic.MainMenu.Docks.Layout.Save.Replace.Text"));
+		if (choice != QMessageBox::Yes)
+			return;
+		existing->name = name;
+		existing->state = saveState();
+	} else {
+		layouts.push_back({name, saveState()});
+	}
+
+	SaveCustomDockLayouts(layouts);
+	RefreshCustomDockLayoutsMenu();
+}
+
+void OBSBasic::ApplyCustomDockLayout(const QString &name)
+{
+	const QList<DockLayoutRecord> layouts = LoadCustomDockLayouts();
+	const auto layout = std::find_if(layouts.cbegin(), layouts.cend(),
+					 [&name](const DockLayoutRecord &item) { return item.name == name; });
+	if (layout == layouts.cend())
+		return;
+
+	const QByteArray previousState = saveState();
+	if (!restoreState(layout->state)) {
+		restoreState(previousState);
+		OBSMessageBox::warning(this, QTStr("Basic.MainMenu.Docks.Layout.RestoreFailed.Title"),
+				       QTStr("Basic.MainMenu.Docks.Layout.RestoreFailed.Text"));
+		return;
+	}
+
+	config_set_string(App()->GetUserConfig(), "BasicWindow", "DockState", layout->state.toBase64().constData());
+	config_save_safe(App()->GetUserConfig(), "tmp", nullptr);
+	activateWindow();
+}
+
+void OBSBasic::ManageCustomDockLayouts()
+{
+	QDialog dialog(this);
+	dialog.setWindowTitle(QTStr("Basic.MainMenu.Docks.Layout.Manager.Title"));
+	dialog.resize(480, 360);
+
+	auto *layout = new QVBoxLayout(&dialog);
+	auto *list = new QListWidget(&dialog);
+	list->setSelectionMode(QAbstractItemView::SingleSelection);
+	layout->addWidget(list);
+
+	auto *buttonLayout = new QHBoxLayout();
+	auto *applyButton = new QPushButton(QTStr("Basic.MainMenu.Docks.Layout.Manager.Apply"), &dialog);
+	auto *renameButton = new QPushButton(QTStr("Basic.MainMenu.Docks.Layout.Manager.Rename"), &dialog);
+	auto *deleteButton = new QPushButton(QTStr("Basic.MainMenu.Docks.Layout.Manager.Delete"), &dialog);
+	buttonLayout->addWidget(applyButton);
+	buttonLayout->addWidget(renameButton);
+	buttonLayout->addWidget(deleteButton);
+	buttonLayout->addStretch();
+	layout->addLayout(buttonLayout);
+
+	auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+	layout->addWidget(buttonBox);
+	connect(buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+	QList<DockLayoutRecord> layouts = LoadCustomDockLayouts();
+	auto refreshList = [&]() {
+		list->clear();
+		for (const DockLayoutRecord &record : layouts)
+			list->addItem(record.name);
+		const bool hasLayouts = !layouts.isEmpty();
+		applyButton->setEnabled(hasLayouts);
+		renameButton->setEnabled(hasLayouts);
+		deleteButton->setEnabled(hasLayouts);
+		if (hasLayouts)
+			list->setCurrentRow(0);
+	};
+	refreshList();
+
+	connect(list, &QListWidget::itemDoubleClicked, &dialog, [this, &dialog](QListWidgetItem *item) {
+		ApplyCustomDockLayout(item->text());
+		dialog.accept();
+	});
+	connect(applyButton, &QPushButton::clicked, &dialog, [this, &dialog, list]() {
+		if (QListWidgetItem *item = list->currentItem()) {
+			ApplyCustomDockLayout(item->text());
+			dialog.accept();
+		}
+	});
+	connect(renameButton, &QPushButton::clicked, &dialog, [&, list]() {
+		const int row = list->currentRow();
+		if (row < 0 || row >= layouts.size())
+			return;
+		bool accepted = false;
+		QString name = QInputDialog::getText(&dialog, QTStr("Basic.MainMenu.Docks.Layout.Manager.Rename"),
+						     QTStr("Basic.MainMenu.Docks.Layout.Save.Name"), QLineEdit::Normal,
+						     layouts[row].name, &accepted)
+				       .simplified();
+		if (!accepted)
+			return;
+		bool duplicate = false;
+		for (qsizetype index = 0; index < layouts.size(); ++index) {
+			if (index != row && layouts[index].name.compare(name, Qt::CaseInsensitive) == 0) {
+				duplicate = true;
+				break;
+			}
+		}
+		if (!ValidDockLayoutName(name) || duplicate) {
+			OBSMessageBox::warning(&dialog, QTStr("Basic.MainMenu.Docks.Layout.Save.Title"),
+					       QTStr("Basic.MainMenu.Docks.Layout.Save.Invalid"));
+			return;
+		}
+		layouts[row].name = name;
+		SaveCustomDockLayouts(layouts);
+		RefreshCustomDockLayoutsMenu();
+		refreshList();
+		list->setCurrentRow(row);
+	});
+	connect(deleteButton, &QPushButton::clicked, &dialog, [&, list]() {
+		const int row = list->currentRow();
+		if (row < 0 || row >= layouts.size())
+			return;
+		const auto choice = OBSMessageBox::question(&dialog,
+							    QTStr("Basic.MainMenu.Docks.Layout.Manager.Delete.Title"),
+							    QTStr("Basic.MainMenu.Docks.Layout.Manager.Delete.Text"));
+		if (choice != QMessageBox::Yes)
+			return;
+		layouts.removeAt(row);
+		SaveCustomDockLayouts(layouts);
+		RefreshCustomDockLayoutsMenu();
+		refreshList();
+		if (!layouts.isEmpty())
+			list->setCurrentRow(std::min(row, static_cast<int>(layouts.size() - 1)));
+	});
+
+	dialog.exec();
 }
 
 void OBSBasic::on_lockDocks_toggled(bool lock)

@@ -642,6 +642,7 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	addDockWidget(Qt::BottomDockWidgetArea, controlsDock);
 
 	startingDockLayout = saveState();
+	SetupDockLayoutMenu();
 
 	statsDock = new OBSDock();
 	statsDock->setObjectName(QStringLiteral("statsDock"));

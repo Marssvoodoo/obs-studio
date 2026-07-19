@@ -460,6 +460,13 @@ private:
 	QPointer<OBSDock> previewDock;
 	QPointer<OBSDock> controlsDock;
 	QPointer<OBSDock> mixerDock;
+	QPointer<QMenu> customDockLayoutsMenu;
+
+	void SetupDockLayoutMenu();
+	void RefreshCustomDockLayoutsMenu();
+	void SaveCustomDockLayout();
+	void ManageCustomDockLayouts();
+	void ApplyCustomDockLayout(const QString &name);
 
 public:
 	void AddDockWidget(QDockWidget *dock, Qt::DockWidgetArea area, bool extraBrowser = false);
@@ -472,6 +479,7 @@ private slots:
 	void on_resetDocks_triggered(bool force = false);
 	void on_applyStandardDockLayout_triggered();
 	void on_applyBalancedDockLayout_triggered();
+	void on_applyFourTwoDockLayout_triggered();
 	void on_lockDocks_toggled(bool lock);
 	void on_sideDocks_toggled(bool side);
 
