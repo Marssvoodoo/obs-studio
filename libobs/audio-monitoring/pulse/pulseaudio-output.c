@@ -231,6 +231,8 @@ finish:
 
 static void play_audio(struct audio_monitor *monitor, const struct audio_data *audio_data, float vol, bool muted)
 {
+	UNUSED_PARAMETER(muted);
+
 	size_t bytes;
 
 	uint8_t *resample_data[MAX_AV_PLANES];
@@ -252,12 +254,8 @@ static void play_audio(struct audio_monitor *monitor, const struct audio_data *a
 
 	bytes = monitor->bytes_per_frame * resample_frames;
 
-	if (muted) {
-		memset(resample_data[0], 0, bytes);
-	} else {
-		if (!close_float(vol, 1.0f, EPSILON)) {
-			process_volume(monitor, vol, resample_data, resample_frames);
-		}
+	if (!close_float(vol, 1.0f, EPSILON)) {
+		process_volume(monitor, vol, resample_data, resample_frames);
 	}
 
 	deque_push_back(&monitor->new_data, resample_data[0], bytes);

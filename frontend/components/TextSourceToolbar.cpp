@@ -40,8 +40,9 @@ TextSourceToolbar::TextSourceToolbar(QWidget *parent, OBSSource source)
 	bool single_line = !read_from_file && (!text || (strchr(text, '\n') == nullptr));
 	ui->emptySpace->setVisible(!single_line);
 	ui->text->setVisible(single_line);
-	if (single_line)
+	if (single_line) {
 		ui->text->setText(text);
+	}
 }
 
 TextSourceToolbar::~TextSourceToolbar() {}
@@ -98,7 +99,7 @@ void TextSourceToolbar::on_selectColor_clicked()
 
 	bool freetype = strncmp(obs_source_get_id(source), "text_ft2_source", 15) == 0;
 
-	obs_property_t *p = obs_properties_get(props.get(), freetype ? "color1" : "color");
+	obs_property_t *p = obs_properties_get(props, freetype ? "color1" : "color");
 
 	const char *desc = obs_property_description(p);
 

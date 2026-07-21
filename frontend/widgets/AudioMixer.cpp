@@ -390,7 +390,6 @@ void AudioMixer::updateControlVisibility(QString uuid)
 	bool show = getMixerVisibilityForControl(control);
 
 	if (show) {
-		control->updateMixerState();
 		control->show();
 	} else {
 		control->hide();

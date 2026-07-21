@@ -19,8 +19,9 @@ OBSBasicAdvAudio::OBSBasicAdvAudio(QWidget *parent) : QDialog(parent), ui(new Ui
 
 	VolumeType volType = (VolumeType)config_get_int(App()->GetUserConfig(), "BasicWindow", "AdvAudioVolumeType");
 
-	if (volType == VolumeType::Percent)
+	if (volType == VolumeType::Percent) {
 		ui->usePercent->setChecked(true);
+	}
 
 	if (obs_audio_monitoring_available()) {
 		ui->monitorBus->blockSignals(true);
@@ -49,8 +50,9 @@ OBSBasicAdvAudio::~OBSBasicAdvAudio()
 {
 	OBSBasic *main = OBSBasic::Get();
 
-	for (size_t i = 0; i < controls.size(); ++i)
+	for (size_t i = 0; i < controls.size(); ++i) {
 		delete controls[i];
+	}
 
 	main->SaveProject();
 }
@@ -61,8 +63,9 @@ bool OBSBasicAdvAudio::EnumSources(void *param, obs_source_t *source)
 	uint32_t flags = obs_source_get_output_flags(source);
 
 	if ((flags & OBS_SOURCE_AUDIO) != 0 &&
-	    (dialog->showInactive || (obs_source_active(source) && obs_source_audio_active(source))))
+	    (dialog->showInactive || (obs_source_active(source) && obs_source_audio_active(source)))) {
 		dialog->AddAudioSource(source);
+	}
 
 	return true;
 }
@@ -85,16 +88,18 @@ void OBSBasicAdvAudio::OBSSourceActivated(void *param, calldata_t *calldata)
 {
 	OBSSource source((obs_source_t *)calldata_ptr(calldata, "source"));
 
-	if (obs_source_audio_active(source))
+	if (obs_source_audio_active(source)) {
 		QMetaObject::invokeMethod(static_cast<OBSBasicAdvAudio *>(param), "SourceAdded",
 					  Q_ARG(OBSSource, source));
+	}
 }
 
 inline void OBSBasicAdvAudio::AddAudioSource(obs_source_t *source)
 {
 	for (size_t i = 0; i < controls.size(); i++) {
-		if (controls[i]->GetSource() == source)
+		if (controls[i]->GetSource() == source) {
 			return;
+		}
 	}
 	OBSAdvAudioCtrl *control = new OBSAdvAudioCtrl(ui->mainLayout, source);
 
@@ -109,8 +114,9 @@ void OBSBasicAdvAudio::SourceAdded(OBSSource source)
 {
 	uint32_t flags = obs_source_get_output_flags(source);
 
-	if ((flags & OBS_SOURCE_AUDIO) == 0)
+	if ((flags & OBS_SOURCE_AUDIO) == 0) {
 		return;
+	}
 
 	AddAudioSource(source);
 }
@@ -119,8 +125,9 @@ void OBSBasicAdvAudio::SourceRemoved(OBSSource source)
 {
 	uint32_t flags = obs_source_get_output_flags(source);
 
-	if ((flags & OBS_SOURCE_AUDIO) == 0)
+	if ((flags & OBS_SOURCE_AUDIO) == 0) {
 		return;
+	}
 
 	for (size_t i = 0; i < controls.size(); i++) {
 		if (controls[i]->GetSource() == source) {
@@ -135,13 +142,15 @@ void OBSBasicAdvAudio::on_usePercent_toggled(bool checked)
 {
 	VolumeType type;
 
-	if (checked)
+	if (checked) {
 		type = VolumeType::Percent;
-	else
+	} else {
 		type = VolumeType::dB;
+	}
 
-	for (size_t i = 0; i < controls.size(); i++)
+	for (size_t i = 0; i < controls.size(); i++) {
 		controls[i]->SetVolumeWidget(type);
+	}
 
 	config_set_int(App()->GetUserConfig(), "BasicWindow", "AdvAudioVolumeType", (int)type);
 }
@@ -170,8 +179,9 @@ void OBSBasicAdvAudio::on_monitorBus_currentIndexChanged(int index)
 
 void OBSBasicAdvAudio::SetShowInactive(bool show)
 {
-	if (showInactive == show)
+	if (showInactive == show) {
 		return;
+	}
 
 	showInactive = show;
 

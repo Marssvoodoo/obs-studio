@@ -54,12 +54,14 @@ void OBSBasic::LoadExtraBrowserDocks()
 
 	std::string err;
 	Json json = Json::parse(jsonStr, err);
-	if (!err.empty())
+	if (!err.empty()) {
 		return;
+	}
 
 	Json::array array = json.array_items();
-	if (!array.empty())
+	if (!array.empty()) {
 		extraBrowserMenuDocksSeparator = ui->menuDocks->addSeparator();
+	}
 
 	for (Json &item : array) {
 		std::string title = item["title"].string_value();
@@ -324,8 +326,9 @@ static std::string GenId()
 void CheckExistingCookieId()
 {
 	OBSBasic *main = OBSBasic::Get();
-	if (config_has_user_value(main->Config(), "Panels", "CookieId"))
+	if (config_has_user_value(main->Config(), "Panels", "CookieId")) {
 		return;
+	}
 
 	config_set_string(main->Config(), "Panels", "CookieId", GenId().c_str());
 }
@@ -333,10 +336,12 @@ void CheckExistingCookieId()
 #ifdef BROWSER_AVAILABLE
 static void InitPanelCookieManager()
 {
-	if (!cef)
+	if (!cef) {
 		return;
-	if (panel_cookies)
+	}
+	if (panel_cookies) {
 		return;
+	}
 
 	CheckExistingCookieId();
 
@@ -395,8 +400,9 @@ void DuplicateCurrentCookieProfile(ConfigFile &config)
 		QDir dstDir(dst_path_full.Get());
 
 		if (srcDir.exists()) {
-			if (!dstDir.exists())
+			if (!dstDir.exists()) {
 				dstDir.mkdir(dst_path_full.Get());
+			}
 
 			QStringList files = srcDir.entryList(QDir::Files);
 			for (const QString &file : files) {
@@ -419,8 +425,9 @@ void DuplicateCurrentCookieProfile(ConfigFile &config)
 void OBSBasic::InitBrowserPanelSafeBlock()
 {
 #ifdef BROWSER_AVAILABLE
-	if (!cef)
+	if (!cef) {
 		return;
+	}
 	if (cef->init_browser()) {
 		InitPanelCookieManager();
 		return;

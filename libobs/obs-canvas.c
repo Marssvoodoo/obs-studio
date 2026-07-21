@@ -303,9 +303,6 @@ bool obs_canvas_has_valid_video_info(obs_canvas_t *canvas)
 
 bool obs_canvas_reset_video_internal(obs_canvas_t *canvas, struct obs_video_info *ovi)
 {
-	if (!ovi && !canvas->mix)
-		return true;
-
 	obs_canvas_clear_mix(canvas);
 
 	/* A NULL ovi means "recreate the mix from the canvas's stored ovi"
@@ -427,7 +424,7 @@ bool obs_canvas_get_video_info(const obs_canvas_t *canvas, struct obs_video_info
 	if (!obs->video.graphics || !canvas->mix)
 		return false;
 
-	*ovi = canvas->ovi;
+	*ovi = canvas->mix->ovi;
 	return true;
 }
 

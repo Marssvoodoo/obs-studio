@@ -207,5 +207,5 @@ protected:
 	void paintEvent(QPaintEvent *event) override;
 
 private slots:
-	void handleSourceDestroyed() { deleteLater(); }
+	void onSourceDestroyed() { deleteLater(); }
 };
