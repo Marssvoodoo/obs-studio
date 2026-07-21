@@ -147,11 +147,24 @@ jobs:
       attestations: 'write'
     secrets: inherit
 
+  package-fork-windows:
+    name: Package Fork Windows
+    uses: ./.github/workflows/package-fork-windows.yaml
+    if: github.repository_owner != 'obsproject' && github.ref_type == 'tag' && contains(github.ref_name, '-voodoo')
+    needs: build-project
+    permissions:
+      contents: read
+
   create-release:
     name: Create Release 🛫
-    if: github.ref_type == 'tag'
+    if: >-
+      always() &&
+      github.ref_type == 'tag' &&
+      needs.build-project.result == 'success' &&
+      ((github.repository_owner == 'obsproject' && needs.sign-windows-build.result == 'success') ||
+      (github.repository_owner != 'obsproject' && needs.package-fork-windows.result == 'success'))
     runs-on: ubuntu-24.04
-    needs: [build-project, sign-windows-build]
+    needs: [build-project, sign-windows-build, package-fork-windows]
     defaults:
       run:
         shell: bash
@@ -163,19 +176,38 @@ jobs:
           if [[ "${RUNNER_DEBUG}" ]]; then set -x; fi
           shopt -s extglob
 
-          case "${GITHUB_REF_NAME}" in
-            +([0-9]).+([0-9]).+([0-9]) )
-              echo 'validTag=true' >> $GITHUB_OUTPUT
-              echo 'prerelease=false' >> $GITHUB_OUTPUT
-              echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
-              ;;
-            +([0-9]).+([0-9]).+([0-9])-@(beta|rc)*([0-9]) )
-              echo 'validTag=true' >> $GITHUB_OUTPUT
-              echo 'prerelease=true' >> $GITHUB_OUTPUT
-              echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
-              ;;
-            *) echo 'validTag=false' >> $GITHUB_OUTPUT ;;
-          esac
+          write_release_outputs() {
+            local prerelease="$1"
+            local version="$2"
+            local base_version="$3"
+            local release_name="$4"
+            {
+              printf 'validTag=true\n'
+              printf 'prerelease=%s\n' "${prerelease}"
+              printf 'version=%s\n' "${version}"
+              printf 'baseVersion=%s\n' "${base_version}"
+              printf 'releaseName=%s\n' "${release_name}"
+            } >> "${GITHUB_OUTPUT}"
+          }
+
+          if [[ "${GITHUB_REPOSITORY_OWNER}" == 'obsproject' ]]; then
+            case "${GITHUB_REF_NAME}" in
+              +([0-9]).+([0-9]).+([0-9]) )
+                write_release_outputs false "${GITHUB_REF_NAME}" "${GITHUB_REF_NAME}" \
+                  "OBS Studio ${GITHUB_REF_NAME}"
+                ;;
+              +([0-9]).+([0-9]).+([0-9])-@(beta|rc)*([0-9]) )
+                write_release_outputs true "${GITHUB_REF_NAME}" "${GITHUB_REF_NAME}" \
+                  "OBS Studio ${GITHUB_REF_NAME}"
+                ;;
+              *) printf 'validTag=false\n' >> "${GITHUB_OUTPUT}" ;;
+            esac
+          elif [[ "${GITHUB_REF_NAME}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-(beta|rc)[1-9][0-9]*)?)-voodoo[1-9][0-9]*$ ]]; then
+            write_release_outputs true "${GITHUB_REF_NAME}" "${BASH_REMATCH[1]}" \
+              "Voodoo OBS Studio ${GITHUB_REF_NAME}"
+          else
+            printf 'validTag=false\n' >> "${GITHUB_OUTPUT}"
+          fi
 
       - name: Download Build Artifacts 📥
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -199,10 +231,17 @@ jobs:
           ubuntu_2604_x86_64_artifact_name="obs-studio-ubuntu-26.04-x86_64-${commit_hash}"
           ubuntu_2604_x86_64_debug_name="obs-studio-ubuntu-26.04-x86_64-${commit_hash}-dbgsym"
           ubuntu_2604_sources_name="obs-studio-ubuntu-26.04-sources-${commit_hash}"
-          windows_x64_artifact_name="obs-studio-windows-x64-${{ steps.check.outputs.version }}-signed"
+          if [[ "${GITHUB_REPOSITORY_OWNER}" == 'obsproject' ]]; then
+            windows_package_suffix='signed'
+          else
+            windows_package_suffix='unsigned'
+          fi
+
+          windows_version="${{ steps.check.outputs.version }}"
+          windows_x64_artifact_name="obs-studio-windows-x64-${windows_version}-${windows_package_suffix}"
           windows_x64_installer_name="obs-studio-windows-x64-${{ steps.check.outputs.version }}-installer"
           windows_x64_debug_name="obs-studio-windows-x64-${{ steps.check.outputs.version }}-pdbs"
-          windows_arm64_artifact_name="obs-studio-windows-arm64-${{ steps.check.outputs.version }}-signed"
+          windows_arm64_artifact_name="obs-studio-windows-arm64-${windows_version}-${windows_package_suffix}"
           windows_arm64_debug_name="obs-studio-windows-arm64-${{ steps.check.outputs.version }}-pdbs"
 
           echo '::group::Renaming Artifacts'
@@ -248,6 +287,27 @@ jobs:
             echo "    ${file##*/}: $(sha256sum "${file}" | cut -d " " -f 1)" >> ${{ github.workspace }}/CHECKSUMS.txt
           done
 
+      - name: Prepare Release Notes
+        if: fromJSON(steps.check.outputs.validTag)
+        run: |
+          : Prepare Release Notes
+          if [[ "${GITHUB_REPOSITORY_OWNER}" == 'obsproject' ]]; then
+            cp "${{ github.workspace }}/CHECKSUMS.txt" "${{ github.workspace }}/RELEASE_BODY.md"
+          else
+            cat > "${{ github.workspace }}/RELEASE_BODY.md" <<'EOF'
+          > [!IMPORTANT]
+          > This is a community fork build, not an official OBS Project release.
+          > Windows packages and the Windows installer are unsigned. Verify the
+          > SHA-256 checksums before installing or extracting a download.
+
+          The release mirrors the official OBS platform and debug-symbol download
+          categories. VST3 hosting is currently available only in the Windows
+          packages.
+
+          EOF
+            cat "${{ github.workspace }}/CHECKSUMS.txt" >> "${{ github.workspace }}/RELEASE_BODY.md"
+          fi
+
       - name: Create Release 🛫
         if: fromJSON(steps.check.outputs.validTag)
         id: create_release
@@ -256,8 +316,8 @@ jobs:
           draft: true
           prerelease: ${{ fromJSON(steps.check.outputs.prerelease) }}
           tag_name: ${{ steps.check.outputs.version }}
-          name: OBS Studio ${{ steps.check.outputs.version }}
-          body_path: ${{ github.workspace }}/CHECKSUMS.txt
+          name: ${{ steps.check.outputs.releaseName }}
+          body_path: ${{ github.workspace }}/RELEASE_BODY.md
           files: |
             ${{ github.workspace }}/OBS-Studio-${{ steps.check.outputs.version }}-macOS-*.dmg
             ${{ github.workspace }}/OBS-Studio-${{ steps.check.outputs.version }}-macOS-*-dSYMs.tar.xz

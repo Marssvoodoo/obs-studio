@@ -1,0 +1,129 @@
+name: Package Fork Windows
+
+on:
+  workflow_call:
+
+jobs:
+  package-windows:
+    name: Windows ${{ matrix.architecture }} Package
+    if: github.repository_owner != 'obsproject' && github.ref_type == 'tag' && contains(github.ref_name, '-voodoo')
+    runs-on: windows-2025-vs2026
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [x64, arm64]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Set Up Package Metadata
+        id: setup
+        run: |
+          $shortHash = $env:GITHUB_SHA.Substring(0, 9)
+          if ($env:GITHUB_REF_NAME -notmatch '-voodoo[1-9][0-9]*$') {
+            throw "Unsupported Voodoo release tag: $env:GITHUB_REF_NAME"
+          }
+
+          $baseVersion = $env:GITHUB_REF_NAME -replace '-voodoo[1-9][0-9]*$', ''
+          $channel = if ($baseVersion -match '(beta|rc)') { 'beta' } else { 'stable' }
+
+          if ($baseVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-(beta|rc)[1-9][0-9]*)?$') {
+            throw "Unsupported base version: $baseVersion"
+          }
+
+          "commitHash=$shortHash" >> $env:GITHUB_OUTPUT
+          "baseVersion=$baseVersion" >> $env:GITHUB_OUTPUT
+          "channel=$channel" >> $env:GITHUB_OUTPUT
+
+      - name: Download Windows Build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: obs-studio-windows-${{ matrix.architecture }}-${{ steps.setup.outputs.commitHash }}
+          path: ${{ github.workspace }}/build
+
+      - name: Extract Windows Build
+        run: |
+          $archive = Get-ChildItem -Path build -Filter '*.zip' -File
+          if ($archive.Count -ne 1) {
+            throw "Expected one Windows build archive, found $($archive.Count)."
+          }
+
+          Expand-Archive -LiteralPath $archive.FullName -DestinationPath build
+          Remove-Item -LiteralPath $archive.FullName
+
+      - name: Set Up Pinned Packaging Tools
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOUF_TAG: v0.6.5
+          BOUF_HASH: 2e16d5116415579b5dd8cd68b3fe6edaa7513938427567121942f592292605d5
+          BOUF_NSIS_HASH: e323043627cfeebd237d306afc001c8c36a3c37f6ecef2b349a19a3209ae3450
+        run: |
+          New-Item -ItemType Directory -Path bouf -Force | Out-Null
+          Push-Location bouf
+
+          $boufArchive = "bouf-windows-$env:BOUF_TAG.zip"
+          $nsisArchive = "bouf-nsis-$env:BOUF_TAG.zip"
+          gh release download $env:BOUF_TAG -R obsproject/bouf -p $boufArchive -p $nsisArchive
+
+          if ((Get-FileHash -LiteralPath $boufArchive -Algorithm SHA256).Hash -ne $env:BOUF_HASH) {
+            throw 'bouf archive hash does not match.'
+          }
+          if ((Get-FileHash -LiteralPath $nsisArchive -Algorithm SHA256).Hash -ne $env:BOUF_NSIS_HASH) {
+            throw 'bouf NSIS archive hash does not match.'
+          }
+
+          Expand-Archive -LiteralPath $boufArchive -DestinationPath bin
+          Expand-Archive -LiteralPath $nsisArchive -DestinationPath nsis
+          Pop-Location
+
+          winget install --silent --accept-package-agreements --accept-source-agreements `
+            --disable-interactivity -e --id NSIS.NSIS
+
+      - name: Build Unsigned Windows Packages
+        run: |
+          New-Item -ItemType Directory -Path old_builds -Force | Out-Null
+          New-Item -ItemType Directory -Path output -Force | Out-Null
+
+          $arguments = @(
+            '--config', ".github/actions/windows-signing/config_${{ matrix.architecture }}.toml",
+            '--version', '${{ steps.setup.outputs.baseVersion }}',
+            '--branch', '${{ steps.setup.outputs.channel }}',
+            '--input', "${{ github.workspace }}/build",
+            '--previous', "${{ github.workspace }}/old_builds",
+            '--output', "${{ github.workspace }}/output",
+            '--packaging-only',
+            '--skip-codesigning'
+          )
+
+          & "${{ github.workspace }}/bouf/bin/bouf.exe" @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "bouf exited with code $LASTEXITCODE."
+          }
+
+      - name: Upload Portable Build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: obs-studio-windows-${{ matrix.architecture }}-${{ github.ref_name }}-unsigned
+          compression-level: 0
+          path: ${{ github.workspace }}/output/*-${{ matrix.architecture }}.zip
+
+      - name: Upload Debug Symbols
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: obs-studio-windows-${{ matrix.architecture }}-${{ github.ref_name }}-pdbs
+          compression-level: 0
+          path: ${{ github.workspace }}/output/*-pdbs.zip
+
+      - name: Upload Installer
+        if: matrix.architecture == 'x64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: obs-studio-windows-${{ matrix.architecture }}-${{ github.ref_name }}-installer
+          compression-level: 0
+          path: ${{ github.workspace }}/output/*.exe

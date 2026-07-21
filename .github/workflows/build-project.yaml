@@ -395,6 +395,23 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Check Out VST3 SDK
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: steinbergmedia/vst3sdk
+          ref: 9fad9770f2ae8542ab1a548a68c1ad1ac690abe0
+          path: .deps/vst3sdk
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Verify VST3 SDK Revision
+        run: |
+          $expected = '9fad9770f2ae8542ab1a548a68c1ad1ac690abe0'
+          $actual = git -C .deps/vst3sdk rev-parse HEAD
+          if ($actual -ne $expected) {
+            throw "Unexpected VST3 SDK revision: $actual"
+          }
+
       - name: Build OBS Studio 🧱
         uses: ./.github/actions/build-obs
         env:

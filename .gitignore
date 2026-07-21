@@ -41,6 +41,8 @@
 !OPTIMIZATION_IMPLEMENTATION_GUIDE.md
 !OPTIMIZATION_REPORT.md
 !PERFORMANCE_TEST_RESULTS.md
+!RELEASES.md
+!RELEASE_NOTES_v32.2.0-rc2-voodoo1.md
 !build_optimized.bat
 !run_build.bat
 !configure_and_build.bat
