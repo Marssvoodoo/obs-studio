@@ -304,6 +304,10 @@ jobs:
           categories. VST3 hosting is currently available only in the Windows
           packages.
 
+          Developed with assistance from **ChatGPT Sol 5.6** and **Fable**.
+          Contributor mentions and source acknowledgements are preserved in
+          `ACKNOWLEDGEMENTS.md` in the tagged source.
+
           EOF
             cat "${{ github.workspace }}/CHECKSUMS.txt" >> "${{ github.workspace }}/RELEASE_BODY.md"
           fi

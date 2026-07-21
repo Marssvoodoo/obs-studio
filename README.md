@@ -7,6 +7,7 @@
 [![Base](https://img.shields.io/badge/OBS_Base-32.2.0--rc2-c1121f?style=for-the-badge)](https://github.com/obsproject/obs-studio/releases/tag/32.2.0-rc2)
 [![Windows](https://img.shields.io/badge/Windows-x64_%7C_arm64-202020?style=for-the-badge&logo=windows11)](#downloads)
 [![VST](https://img.shields.io/badge/Audio-VST2_%2B_VST3-c1121f?style=for-the-badge)](plugins/obs-vst3/README.md)
+[![Built with](https://img.shields.io/badge/Built_with-ChatGPT_Sol_5.6_%2B_Fable-c1121f?style=for-the-badge)](ACKNOWLEDGEMENTS.md)
 [![License](https://img.shields.io/badge/License-GPL--2.0-202020?style=for-the-badge)](COPYING)
 
 [Download releases](https://github.com/Marssvoodoo/obs-studio/releases) ·
@@ -177,8 +178,17 @@ and [RELEASES.md](RELEASES.md) for the complete release process.
 - [Interface customization and mixer calibration](INTERFACE_CUSTOMIZATION.md)
 - [Windows VST3 host architecture and acceptance](plugins/obs-vst3/README.md)
 - [Release downloads and verification](RELEASES.md)
+- [Credits and contributor acknowledgements](ACKNOWLEDGEMENTS.md)
 - [Performance test results](PERFORMANCE_TEST_RESULTS.md)
 - [Optimization implementation notes](OPTIMIZATION_IMPLEMENTATION_GUIDE.md)
+
+## Credits and acknowledgements
+
+Voodoo OBS Studio is directed and maintained by
+[@Marssvoodoo](https://github.com/Marssvoodoo), with development assistance
+from **ChatGPT Sol 5.6** and **Fable**. The fork preserves direct mentions for
+the people and projects whose work was incorporated. See
+[ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) for the complete list.
 
 ## License and upstream
 

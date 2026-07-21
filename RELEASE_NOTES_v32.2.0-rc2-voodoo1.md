@@ -71,3 +71,9 @@ performance feature set into one tested build.
 The release workflow now creates the same 14 platform and debug-symbol download
 categories as upstream OBS. Fork Windows portable builds and the x64 installer
 are unsigned, and every release includes SHA-256 checksums.
+
+## Credits
+
+Voodoo OBS Studio is directed and maintained by Marcus Booker, with development
+assistance from **ChatGPT Sol 5.6** and **Fable**. Contributor mentions and
+source acknowledgements are recorded in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
