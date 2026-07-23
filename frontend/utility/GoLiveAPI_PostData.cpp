@@ -19,7 +19,10 @@ GoLiveApi::PostData constructGoLivePost(QString streamKey, const std::optional<u
 	auto &client = post_data.client;
 
 	client.name = "obs-studio";
-	client.version = obs_get_version_string();
+	// 2026-07-22: report canonical semver ("32.2.0"), not the fork's
+	// "32.2.0-rc2-perf" — Twitch Enhanced Broadcasting rejects the multitrack
+	// session (RTMP handshake closed) when the client version is not clean semver.
+	client.version = obs_get_version_canonical_string();
 
 	const char *encoder_id = nullptr;
 	for (size_t i = 0; obs_enum_encoder_types(i, &encoder_id); i++) {

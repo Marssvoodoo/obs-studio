@@ -230,7 +230,10 @@ static void build_flv_meta_data(obs_output_t *context, uint8_t **output, size_t 
 
 	dstr_printf(&encoder_name, "%s (libobs version ", MODULE_NAME);
 
-	dstr_cat(&encoder_name, obs_get_version_string());
+	/* 2026-07-22: canonical semver only — Twitch Enhanced Broadcasting ingest
+	 * validates the client version and closes the connection for the fork's
+	 * "-perf"/RC suffix. This onMetaData string reaches every RTMP ingest. */
+	dstr_cat(&encoder_name, obs_get_version_canonical_string());
 
 	dstr_cat(&encoder_name, ")");
 

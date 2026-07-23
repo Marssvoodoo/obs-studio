@@ -1668,6 +1668,20 @@ const char *obs_get_version_string(void)
 	return OBS_VERSION;
 }
 
+/*
+ * 2026-07-22: Twitch Enhanced Broadcasting (multitrack) ingest closes the RTMP
+ * connection at handshake when the reported client version is not a clean,
+ * stable semver. This fork builds as "32.2.0-rc2-perf" (OBS_VERSION), whose
+ * "-perf" suffix / RC form fails Twitch's version validation even though the
+ * GoLive config request succeeds. Return the canonical "32.2.0" for anything
+ * that reaches a third-party ingest/API; the fork keeps its full branding in
+ * obs_get_version_string() (About box, logs, etc.).
+ */
+const char *obs_get_version_canonical_string(void)
+{
+	return OBS_VERSION_CANONICAL;
+}
+
 void obs_set_locale(const char *locale)
 {
 	struct obs_module *module;
