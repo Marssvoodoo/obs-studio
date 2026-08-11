@@ -379,8 +379,8 @@ EXPORT const char *obs_get_version_string(void);
 
 /**
  * @return The canonical MAJOR.MINOR.PATCH core version string, with any
- *         pre-release/build suffix stripped (e.g. "32.2.0" for a
- *         "32.2.0-rc2-perf" build). Use this for any version reported to a
+ *         pre-release/build suffix stripped (e.g. "32.2.1" for a
+ *         "32.2.1-perf" build). Use this for any version reported to a
  *         third-party ingest/API that validates it as strict semver.
  */
 EXPORT const char *obs_get_version_canonical_string(void);
