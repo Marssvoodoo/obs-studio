@@ -14,7 +14,7 @@ Use a tag without a leading `v`:
 Examples:
 
 ```text
-32.2.1-voodoo1
+32.2.2-voodoo1
 32.2.0-rc2-voodoo1
 ```
 
@@ -70,7 +70,7 @@ Windows packages.
 Run these commands from a clean, reviewed release commit:
 
 ```powershell
-$Version = '32.2.1-voodoo1'
+$Version = '32.2.2-voodoo1'
 git tag -a $Version -m "Voodoo OBS Studio $Version"
 git push origin $Version
 ```

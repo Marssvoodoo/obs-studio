@@ -19,8 +19,8 @@ GoLiveApi::PostData constructGoLivePost(QString streamKey, const std::optional<u
 	auto &client = post_data.client;
 
 	client.name = "obs-studio";
-	// Report canonical semver (for example, "32.2.1"), not the fork's branded
-	// version (for example, "32.2.1-perf"). Twitch Enhanced Broadcasting
+	// Report canonical semver (for example, "32.2.2"), not the fork's branded
+	// version (for example, "32.2.2-perf"). Twitch Enhanced Broadcasting
 	// rejects the multitrack session when the client version is not clean semver.
 	client.version = obs_get_version_canonical_string();
 

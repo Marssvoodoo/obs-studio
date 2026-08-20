@@ -4,7 +4,7 @@
 
 ### A production-focused OBS fork for live audio, flexible workspaces, and resilient plug-in hosting
 
-[![Base](https://img.shields.io/badge/OBS_Base-32.2.1-c1121f?style=for-the-badge)](https://github.com/obsproject/obs-studio/releases/tag/32.2.1)
+[![Base](https://img.shields.io/badge/OBS_Base-32.2.2-c1121f?style=for-the-badge)](https://github.com/obsproject/obs-studio/releases/tag/32.2.2)
 [![Windows](https://img.shields.io/badge/Windows-x64_%7C_arm64-202020?style=for-the-badge&logo=windows11)](#downloads)
 [![VST](https://img.shields.io/badge/Audio-VST2_%2B_VST3-c1121f?style=for-the-badge)](plugins/obs-vst3/README.md)
 [![Built with](https://img.shields.io/badge/Built_with-ChatGPT_Sol_5.6_%2B_Fable-c1121f?style=for-the-badge)](ACKNOWLEDGEMENTS.md)
@@ -121,18 +121,19 @@ buttons, meters, and status surfaces.
 
 ## Upstream 32.2 foundation
 
-The current branch is merged with the exact upstream `32.2.1` tag. It keeps
+The current branch is merged with the exact upstream `32.2.2` tag. It keeps
 the fork features above while gaining the 32.2 Add Source browser, improved FPS
 selector, missing-file filter support, custom source icons, WebP slideshow
 directory support, frontend copy/paste APIs, SDR-to-HDR filtering, multitrack
 dynamic bitrate, reliable game-capture hook updates, better hook diagnostics,
-and upstream performance, security, and stability fixes.
+the 32.2.2 Windows first-start plug-in loading hotfix, and upstream
+performance, security, and stability fixes.
 
 ## Downloads
 
 Fork release tags use the format
 `<base-version>-voodoo<revision>`, for example
-`32.2.1-voodoo1`. A tag build creates the same platform and debug-symbol
+`32.2.2-voodoo1`. A tag build creates the same platform and debug-symbol
 download categories as upstream OBS:
 
 | Platform | Download |

@@ -45,6 +45,7 @@
 !RELEASES.md
 !RELEASE_NOTES_v32.2.0-rc2-voodoo1.md
 !RELEASE_NOTES_v32.2.1-voodoo1.md
+!RELEASE_NOTES_v32.2.2-voodoo1.md
 !build_optimized.bat
 !run_build.bat
 !configure_and_build.bat

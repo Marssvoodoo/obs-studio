@@ -40,7 +40,7 @@ echo === Step 1: Generating Visual Studio solution in build directory ===
   -DENABLE_BROWSER=ON ^
   -DCEF_ROOT_DIR="%CEF_ROOT%" ^
   -DCEF_LIBRARY_WRAPPER_RELEASE="%CEF_ROOT%/build/libcef_dll_wrapper/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib" ^
-  -DOBS_VERSION_OVERRIDE="32.2.1-perf" ^
+  -DOBS_VERSION_OVERRIDE="32.2.2-perf" ^
   -DCMAKE_BUILD_TYPE=Release
 
 if %errorlevel% NEQ 0 (
