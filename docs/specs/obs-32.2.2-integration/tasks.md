@@ -10,5 +10,5 @@
 - [ ] Run non-streaming startup and normal-exit acceptance. Startup passed;
   normal interactive exit remains unverified because the hidden-window close
   was not accepted and the multi-window fallback was an invalid test.
-- [ ] Commit the integration documentation and push the fork branch.
-- [ ] Verify local/remote SHA equality and record final evidence.
+- [x] Commit the integration documentation and push the fork branch.
+- [x] Verify local/remote SHA equality and record final evidence.
