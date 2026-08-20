@@ -45,15 +45,18 @@ struct audio_job {
 /*
  * obs_audio_threadpool_create
  *
- * @num_threads   Number of worker threads to spawn.  Pass 0 to auto-detect
- *               (= logical-core-count - 1, clamped to [1, 16], disabled on
- *               single-core systems).
- * @queue_cap     Unused legacy parameter. Pass 0.
+ * @num_threads   Number of worker threads to spawn. Pass 0 to auto-detect.
+ * @queue_cap     Expected jobs per batch. Auto-detection limits workers to
+ *               one per four jobs in addition to the CPU and 16-thread caps.
  *
  * Returns NULL on failure.
  */
 struct obs_audio_threadpool *obs_audio_threadpool_create(size_t num_threads,
 							 size_t queue_cap);
+
+/* Calculate automatic worker count for deterministic tests and diagnostics. */
+size_t obs_audio_threadpool_recommended_threads(size_t logical_cores,
+						 size_t expected_jobs);
 
 /*
  * obs_audio_threadpool_destroy

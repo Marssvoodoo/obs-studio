@@ -13,7 +13,12 @@
 #include <QScrollArea>
 #include <QVBoxLayout>
 
+#include <cstring>
+
 #ifdef _WIN32
+#include <util/windows/ComPtr.hpp>
+
+#include <dxgi1_2.h>
 #include <windows.h>
 #elif defined(__linux__)
 #include <dlfcn.h>
@@ -46,13 +51,83 @@ struct nvmlMemory_t {
 };
 constexpr int NVML_SUCCESS_OK = 0;
 constexpr int NVML_TEMPERATURE_GPU_SENSOR = 0;
+#ifdef _WIN32
+constexpr int CUDA_SUCCESS_OK = 0;
+
+static bool selectedAdapterLuid(LUID &luid)
+{
+	obs_video_info videoInfo{};
+	if (!obs_get_video_info(&videoInfo))
+		return false;
+
+	ComPtr<IDXGIFactory1> factory;
+	if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+		return false;
+
+	ComPtr<IDXGIAdapter1> adapter;
+	if (factory->EnumAdapters1(videoInfo.adapter, adapter.Assign()) != S_OK)
+		return false;
+
+	DXGI_ADAPTER_DESC1 description{};
+	if (FAILED(adapter->GetDesc1(&description)))
+		return false;
+
+	luid = description.AdapterLuid;
+	return true;
+}
+
+static bool cudaPciBusIdForLuid(const LUID &selectedLuid, char *pciBusId, int pciBusIdSize)
+{
+	HMODULE cuda = LoadLibraryExW(L"nvcuda.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+	if (!cuda)
+		return false;
+
+	using CUdevice = int;
+	using CuInit = int(WINAPI *)(unsigned int);
+	using CuDeviceGetCount = int(WINAPI *)(int *);
+	using CuDeviceGet = int(WINAPI *)(CUdevice *, int);
+	using CuDeviceGetLuid = int(WINAPI *)(char *, unsigned int *, CUdevice);
+	using CuDeviceGetPciBusId = int(WINAPI *)(char *, int, CUdevice);
+
+	auto cuInit = reinterpret_cast<CuInit>(GetProcAddress(cuda, "cuInit"));
+	auto cuDeviceGetCount = reinterpret_cast<CuDeviceGetCount>(GetProcAddress(cuda, "cuDeviceGetCount"));
+	auto cuDeviceGet = reinterpret_cast<CuDeviceGet>(GetProcAddress(cuda, "cuDeviceGet"));
+	auto cuDeviceGetLuid = reinterpret_cast<CuDeviceGetLuid>(GetProcAddress(cuda, "cuDeviceGetLuid"));
+	auto cuDeviceGetPciBusId =
+		reinterpret_cast<CuDeviceGetPciBusId>(GetProcAddress(cuda, "cuDeviceGetPCIBusId"));
+
+	bool matched = false;
+	if (cuInit && cuDeviceGetCount && cuDeviceGet && cuDeviceGetLuid && cuDeviceGetPciBusId &&
+	    cuInit(0) == CUDA_SUCCESS_OK) {
+		int deviceCount = 0;
+		if (cuDeviceGetCount(&deviceCount) == CUDA_SUCCESS_OK) {
+			for (int index = 0; index < deviceCount; ++index) {
+				CUdevice cudaDevice = 0;
+				char cudaLuid[sizeof(LUID)]{};
+				unsigned int nodeMask = 0;
+				if (cuDeviceGet(&cudaDevice, index) != CUDA_SUCCESS_OK ||
+				    cuDeviceGetLuid(cudaLuid, &nodeMask, cudaDevice) != CUDA_SUCCESS_OK ||
+				    std::memcmp(cudaLuid, &selectedLuid, sizeof(selectedLuid)) != 0) {
+					continue;
+				}
+
+				matched = cuDeviceGetPciBusId(pciBusId, pciBusIdSize, cudaDevice) == CUDA_SUCCESS_OK;
+				break;
+			}
+		}
+	}
+
+	FreeLibrary(cuda);
+	return matched;
+}
+#endif
 
 class NVMLClient {
 public:
 	NVMLClient()
 	{
 #ifdef _WIN32
-		lib = LoadLibraryA("nvml.dll");
+		lib = LoadLibraryExW(L"nvml.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
 #elif defined(__linux__)
 		lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY | RTLD_LOCAL);
 #endif
@@ -72,17 +147,31 @@ public:
 
 		init = reinterpret_cast<decltype(init)>(sym("nvmlInit_v2"));
 		shutdown_ = reinterpret_cast<decltype(shutdown_)>(sym("nvmlShutdown"));
-		getHandle = reinterpret_cast<decltype(getHandle)>(sym("nvmlDeviceGetHandleByIndex_v2"));
+#ifdef _WIN32
+		getHandleByPciBusId =
+			reinterpret_cast<decltype(getHandleByPciBusId)>(sym("nvmlDeviceGetHandleByPciBusId_v2"));
+#elif defined(__linux__)
+		getHandleByIndex = reinterpret_cast<decltype(getHandleByIndex)>(sym("nvmlDeviceGetHandleByIndex_v2"));
+#endif
 		getUtil = reinterpret_cast<decltype(getUtil)>(sym("nvmlDeviceGetUtilizationRates"));
 		getMemory = reinterpret_cast<decltype(getMemory)>(sym("nvmlDeviceGetMemoryInfo"));
 		getTemp = reinterpret_cast<decltype(getTemp)>(sym("nvmlDeviceGetTemperature"));
 
-		if (!init || !shutdown_ || !getHandle || !getUtil || !getMemory || !getTemp)
+		if (!init || !shutdown_ || !getUtil || !getMemory || !getTemp)
 			return;
+#ifdef _WIN32
+		if (!getHandleByPciBusId)
+			return;
+#elif defined(__linux__)
+		if (!getHandleByIndex)
+			return;
+#endif
 		if (init() != NVML_SUCCESS_OK)
 			return;
-		if (getHandle(0, &device) != NVML_SUCCESS_OK) {
+		initialized = true;
+		if (!resolveSelectedDevice()) {
 			shutdown_();
+			initialized = false;
 			return;
 		}
 		ok = true;
@@ -90,7 +179,7 @@ public:
 
 	~NVMLClient()
 	{
-		if (ok && shutdown_)
+		if (initialized && shutdown_)
 			shutdown_();
 #ifdef _WIN32
 		if (lib)
@@ -138,13 +227,37 @@ public:
 	}
 
 private:
+	bool resolveSelectedDevice()
+	{
+#ifdef _WIN32
+		LUID selectedLuid{};
+		char pciBusId[32]{};
+		if (!selectedAdapterLuid(selectedLuid) ||
+		    !cudaPciBusIdForLuid(selectedLuid, pciBusId, static_cast<int>(sizeof(pciBusId)))) {
+			return false;
+		}
+		return getHandleByPciBusId(pciBusId, &device) == NVML_SUCCESS_OK;
+#elif defined(__linux__)
+		obs_video_info videoInfo{};
+		const unsigned int adapter = obs_get_video_info(&videoInfo) ? videoInfo.adapter : 0;
+		return getHandleByIndex(adapter, &device) == NVML_SUCCESS_OK;
+#else
+		return false;
+#endif
+	}
+
 	void *lib = nullptr;
 	bool ok = false;
+	bool initialized = false;
 	nvmlDevice_t device = nullptr;
 
 	nvmlReturn_t (*init)() = nullptr;
 	nvmlReturn_t (*shutdown_)() = nullptr;
-	nvmlReturn_t (*getHandle)(unsigned int, nvmlDevice_t *) = nullptr;
+#ifdef _WIN32
+	nvmlReturn_t (*getHandleByPciBusId)(const char *, nvmlDevice_t *) = nullptr;
+#elif defined(__linux__)
+	nvmlReturn_t (*getHandleByIndex)(unsigned int, nvmlDevice_t *) = nullptr;
+#endif
 	nvmlReturn_t (*getUtil)(nvmlDevice_t, nvmlUtilization_t *) = nullptr;
 	nvmlReturn_t (*getMemory)(nvmlDevice_t, nvmlMemory_t *) = nullptr;
 	nvmlReturn_t (*getTemp)(nvmlDevice_t, int, unsigned int *) = nullptr;

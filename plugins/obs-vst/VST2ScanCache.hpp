@@ -28,3 +28,4 @@ std::string vst2_sanitize_scan_text(std::string text);
 bool vst2_scan_results_load(const char *path, std::vector<VST2ScanResult> &results, bool safeBackup);
 bool vst2_scan_results_save(const char *path, const std::vector<VST2ScanResult> &results,
 			    const char *backupExtension = nullptr);
+bool vst2_scan_result_passed(const std::vector<VST2ScanResult> &results, const std::string &pluginPath);

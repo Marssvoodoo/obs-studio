@@ -119,6 +119,20 @@ static void vst_update(void *data, obs_data_t *settings)
 		vstPlugin->unloadEffect();
 		return;
 	}
+#ifdef _WIN32
+	std::vector<VST2ScanResult> scanResults;
+	char *cachePath = obs_module_config_path("vst2scan-results.json");
+	// A backup can predate a quarantine decision, so only the current primary
+	// scanner snapshot authorizes in-process loading.
+	const bool scanPassed = cachePath && vst2_scan_results_load(cachePath, scanResults, false) &&
+				vst2_scan_result_passed(scanResults, path);
+	bfree(cachePath);
+	if (!scanPassed) {
+		blog(LOG_WARNING, "[obs-vst] Refusing a VST2 plug-in without a current passed scan result");
+		vstPlugin->unloadEffect();
+		return;
+	}
+#endif
 	vstPlugin->loadEffectFromPath(std::string(path));
 
 	std::string hash = getFileMD5(path);

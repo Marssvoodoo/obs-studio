@@ -78,7 +78,7 @@ extern void copy_video_plane_optimized(uint8_t *dst, const uint8_t *src,
 ```
 
 2. Replace memcpy calls in:
-   - `set_gpu_converted_plane()` 
+   - `set_gpu_converted_plane()`
    - `copy_rgbx_frame()`
 
 3. Test with various video formats and resolutions
@@ -139,9 +139,9 @@ Create a spreadsheet with these columns:
 Get-Process obs64 | Select-Object CPU, WorkingSet64
 
 # Continuous monitoring
-while($true) { 
-    Get-Process obs64 | Select CPU, @{N='Memory(MB)';E={$_.WS/1MB}} 
-    Start-Sleep -Seconds 1 
+while($true) {
+    Get-Process obs64 | Select CPU, @{N='Memory(MB)';E={$_.WS/1MB}}
+    Start-Sleep -Seconds 1
 }
 ```
 

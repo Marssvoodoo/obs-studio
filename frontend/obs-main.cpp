@@ -812,43 +812,6 @@ static void load_debug_privilege(void)
 	CloseHandle(token);
 }
 
-static void set_process_mitigations(void)
-{
-	// SetProcessMitigationPolicy is Windows 8+
-	typedef BOOL(WINAPI * PFN_SetProcessMitigationPolicy)(PROCESS_MITIGATION_POLICY, PVOID, SIZE_T);
-	PFN_SetProcessMitigationPolicy pSetProcessMitigationPolicy;
-
-	pSetProcessMitigationPolicy = (PFN_SetProcessMitigationPolicy)GetProcAddress(GetModuleHandle(L"KERNEL32"),
-										     "SetProcessMitigationPolicy");
-
-	if (pSetProcessMitigationPolicy) {
-		PROCESS_MITIGATION_DEP_POLICY dep = {0};
-		dep.DisableAtlThunkEmulation = 1;
-		dep.Enable = 1;
-		dep.Permanent = TRUE;
-		pSetProcessMitigationPolicy(ProcessDEPPolicy, &dep, sizeof(dep));
-
-		PROCESS_MITIGATION_ASLR_POLICY aslr = {0};
-		aslr.EnableBottomUpRandomization = 1;
-		aslr.EnableHighEntropy = 1;
-		/* Deliberately NOT setting EnableForceRelocateImages /
-		 * DisallowStrippedImages: those make the loader refuse any
-		 * module without a relocation table, which breaks legitimate
-		 * third-party plugin/capture-helper DLLs that ship stripped. */
-		pSetProcessMitigationPolicy(ProcessASLRPolicy, &aslr, sizeof(aslr));
-
-		PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY xpoints = {0};
-		xpoints.DisableExtensionPoints = 1;
-		pSetProcessMitigationPolicy(ProcessExtensionPointDisablePolicy, &xpoints, sizeof(xpoints));
-
-#ifdef _DEBUG
-		PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY hcheck = {0};
-		hcheck.RaiseExceptionOnInvalidHandleReference = 1;
-		hcheck.HandleExceptionsPermanentlyEnabled = 1;
-		pSetProcessMitigationPolicy(ProcessStrictHandleCheckPolicy, &hcheck, sizeof(hcheck));
-#endif
-	}
-}
 #endif
 
 static inline bool arg_is(const char *arg, const char *long_form, const char *short_form)
@@ -893,9 +856,13 @@ static void set_process_mitigation_policies()
 	PROCESS_MITIGATION_ASLR_POLICY aslr = {0};
 	aslr.EnableBottomUpRandomization = 1;
 	aslr.EnableHighEntropy = 1;
-	aslr.EnableForceRelocateImages = 1;
-	aslr.DisallowStrippedImages = 1;
+	/* Do not force relocation or reject stripped images: OBS loads third-party
+	 * plugin and capture-helper DLLs that may legitimately omit relocations. */
 	SetProcessMitigationPolicy(ProcessASLRPolicy, &aslr, sizeof(aslr));
+
+	PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY xpoints = {0};
+	xpoints.DisableExtensionPoints = 1;
+	SetProcessMitigationPolicy(ProcessExtensionPointDisablePolicy, &xpoints, sizeof(xpoints));
 
 #ifdef _DEBUG
 	PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY hcheck = {0};
@@ -972,7 +939,6 @@ int main(int argc, char *argv[])
 	SetDllDirectoryW(L"");
 	load_debug_privilege();
 	base_set_crash_handler(main_crash_handler, nullptr);
-	set_process_mitigations();
 
 	/* Shutdown priority value is a range from 0 - 4FF with higher values getting first priority.
 	 * 000 - 0FF and 400 - 4FF are reserved system ranges.

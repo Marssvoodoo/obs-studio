@@ -903,7 +903,7 @@ bool audio_callback(void *param, uint64_t start_ts_in, uint64_t end_ts_in, uint6
 		if (!audio->render_pool && n_sources >= 3 &&
 		    (audio->render_pool_next_attempt_ns == 0 ||
 		     now_ns >= audio->render_pool_next_attempt_ns)) {
-			audio->render_pool = obs_audio_threadpool_create(0, 0);
+			audio->render_pool = obs_audio_threadpool_create(0, n_sources);
 			if (audio->render_pool) {
 				audio->render_pool_backoff_ns = 0;
 				audio->render_pool_next_attempt_ns = 0;

@@ -142,6 +142,7 @@ AudioMixer::AudioMixer(QWidget *parent) : QFrame(parent)
 
 	programAudioStrip = new ProgramAudioStrip(this);
 	programAudioStrip->setVisible(showProgramAudio);
+	programAudioStrip->setMeteringEnabled(showProgramAudio);
 	programAudioStrip->setContextMenuPolicy(Qt::ContextMenuPolicy::CustomContextMenu);
 
 	mixerToolbar = new QToolBar(this);
@@ -1048,6 +1049,7 @@ void AudioMixer::updateShowProgramAudio()
 
 	showProgramAudio = settingShowProgramAudio;
 	programAudioStrip->setVisible(showProgramAudio);
+	programAudioStrip->setMeteringEnabled(showProgramAudio);
 	if (showProgramAudioCheckBox)
 		showProgramAudioCheckBox->setChecked(showProgramAudio);
 }

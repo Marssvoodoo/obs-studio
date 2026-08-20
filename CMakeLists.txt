@@ -14,6 +14,7 @@ endif()
 include(compilerconfig)
 include(defaults)
 include(helpers)
+include(CTest)
 
 option(ENABLE_FRONTEND "Enable building with UI (requires Qt)" ON)
 option(ENABLE_SCRIPTING "Enable scripting support" ON)
@@ -33,5 +34,9 @@ add_subdirectory(plugins)
 add_subdirectory(test/test-input)
 
 add_subdirectory(frontend)
+
+if(BUILD_TESTING)
+  add_subdirectory(test/fork-regressions)
+endif()
 
 message_configuration()

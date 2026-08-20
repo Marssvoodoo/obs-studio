@@ -114,6 +114,22 @@ static inline bool ipc_pipe_internal_io_pending(void)
 	return GetLastError() == ERROR_IO_PENDING;
 }
 
+static bool wait_for_overlapped_completion(ipc_pipe_server_t *pipe, DWORD *bytes)
+{
+	for (;;) {
+		if (GetOverlappedResultEx(pipe->handle, &pipe->overlap, bytes, 5000, FALSE))
+			return true;
+
+		if (GetLastError() != WAIT_TIMEOUT)
+			return false;
+
+		/* A timeout does not complete the operation. Request cancellation and
+		 * keep the OVERLAPPED and its backing buffer alive until Windows
+		 * reports a terminal result. */
+		CancelIoEx(pipe->handle, &pipe->overlap);
+	}
+}
+
 static DWORD CALLBACK ipc_pipe_internal_server_thread(LPVOID param)
 {
 	ipc_pipe_server_t *pipe = param;
@@ -135,11 +151,7 @@ static DWORD CALLBACK ipc_pipe_internal_server_thread(LPVOID param)
 			loop = false;
 		}
 
-		/* Use GetOverlappedResultEx with a 5s timeout instead of an
-		 * unbounded blocking wait, so a stuck CancelIoEx propagation
-		 * cannot hang shutdown. ERROR_OPERATION_ABORTED / WAIT_TIMEOUT
-		 * are both treated as "give up and exit the thread cleanly". */
-		success = !!GetOverlappedResultEx(pipe->handle, &pipe->overlap, &bytes, 5000, FALSE);
+		success = wait_for_overlapped_completion(pipe, &bytes);
 		if (!success) {
 			pipe->read_callback(pipe->param, NULL, 0);
 			return 0;
@@ -161,11 +173,8 @@ static DWORD CALLBACK ipc_pipe_internal_server_thread(LPVOID param)
 			loop = false;
 		}
 
-		// Wait for results here, because only then is buf free from race conditions.
-		// GetOverlappedResultEx with a 5s timeout prevents a stuck
-		// CancelIoEx propagation from hanging the shutdown path; on
-		// timeout we drop out of the loop and let the caller tear down.
-		success = !!GetOverlappedResultEx(pipe->handle, &pipe->overlap, &bytes, 5000, FALSE);
+		// Wait for a terminal result here, because only then is buf safe to reuse.
+		success = wait_for_overlapped_completion(pipe, &bytes);
 		if (!success || !bytes) {
 			break;
 		}

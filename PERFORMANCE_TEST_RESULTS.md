@@ -55,7 +55,7 @@
 | Dropped Frames | | | |
 | Audio Callback Time ms (OBS Stats) | | | |
 
-**Status:** ☐ Pending / ✅ Pass / ❌ Fail  
+**Status:** ☐ Pending / ✅ Pass / ❌ Fail
 **Notes:** <!-- any observations -->
 
 ---
@@ -71,7 +71,7 @@
 | Avg Frame Time ms | | | |
 | Dropped Frames | | | |
 
-**Status:** ☐ Pending / ✅ Pass / ❌ Fail  
+**Status:** ☐ Pending / ✅ Pass / ❌ Fail
 **Notes:**
 
 ---
@@ -88,7 +88,7 @@
 | Dropped Frames | | | |
 | GPU Encoder drops | | | |
 
-**Status:** ☐ Pending / ✅ Pass / ❌ Fail  
+**Status:** ☐ Pending / ✅ Pass / ❌ Fail
 **Notes:**
 
 ---
@@ -105,7 +105,7 @@
 | Dropped Frames | | | |
 | Stream lag / disconnect | | | |
 
-**Status:** ☐ Pending / ✅ Pass / ❌ Fail  
+**Status:** ☐ Pending / ✅ Pass / ❌ Fail
 **Notes:**
 
 ---

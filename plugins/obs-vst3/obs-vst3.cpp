@@ -884,17 +884,24 @@ static void vst3_update(void *data, obs_data_t *settings)
 		vd->process_failed.store(false, std::memory_order_relaxed);
 		vd->process_failure_pending.store(false, std::memory_order_relaxed);
 
-		// Retrieve path and name from the published scanner snapshot or from settings while a scan is running.
+		// The published scanner snapshot contains passed plug-ins only. Never
+		// fall back to the saved path: failed and skipped modules are present in
+		// the audit cache specifically so they cannot be loaded in-process.
 		auto available_plugins = current_vst3_list();
 		const std::string discovered_path = available_plugins ? available_plugins->getPathById(vst3_plugin_id)
 								      : std::string{};
-		if (!discovered_path.empty()) {
-			vd->vst3_path = discovered_path;
-			vd->vst3_name = available_plugins->getNameById(vst3_plugin_id);
-		} else {
-			vd->vst3_path = obs_data_get_string(settings, "vst3_path");
-			vd->vst3_name = vst3_sanitize_display_text(obs_data_get_string(settings, "vst3_name"));
+		if (discovered_path.empty()) {
+			warnvst3("Refusing a VST3 plug-in with no passed scanner result");
+			vd->vst3_id.clear();
+			vd->vst3_path.clear();
+			vd->vst3_name.clear();
+			vd->last_init_failed = true;
+			vd->bypass.store(true, std::memory_order_release);
+			vd->has_sidechain.store(false, std::memory_order_relaxed);
+			return;
 		}
+		vd->vst3_path = discovered_path;
+		vd->vst3_name = available_plugins->getNameById(vst3_plugin_id);
 		if (vd->vst3_name.empty()) {
 			vd->vst3_name =
 				vst3_sanitize_display_text(std::filesystem::u8path(vd->vst3_path).stem().u8string());

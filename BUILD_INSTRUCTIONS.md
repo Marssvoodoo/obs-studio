@@ -199,5 +199,5 @@ Run while OBS is recording to monitor CPU usage.
 
 ---
 
-**Current Status**: ✅ Build system configured  
+**Current Status**: ✅ Build system configured
 **Next Action**: Run `build_optimized.bat` or manual build commands

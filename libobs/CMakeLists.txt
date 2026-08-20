@@ -32,11 +32,13 @@ target_sources(
     obs-audio-controls.h
     obs-audio.c
     obs-audio-optimized.c
+    obs-audio-optimized.h
     obs-audio-optimized-avx2.c
     obs-audio-pool.c
     obs-audio-pool.h
     obs-audio-threaded.c
     obs-audio-threaded.h
+    obs-audio-worker-sizing.h
     obs-av1.c
     obs-av1.h
     obs-avc.c
@@ -78,6 +80,7 @@ target_sources(
     obs-video-gpu-encode.c
     obs-video.c
     obs-view.c
+    obs-video-overlap.h
     obs.c
     obs.h
     obs.hpp

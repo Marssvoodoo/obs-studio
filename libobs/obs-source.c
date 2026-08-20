@@ -4781,6 +4781,12 @@ static void check_descendant(obs_source_t *parent, obs_source_t *child, void *pa
 		info->exists = true;
 }
 
+static inline void mark_audio_graph_dirty_from_topology(void)
+{
+	if (obs)
+		os_atomic_set_long(&obs->audio.graph_dirty, 1);
+}
+
 bool obs_source_add_active_child(obs_source_t *parent, obs_source_t *child)
 {
 	struct descendant_info info = {false, parent};
@@ -4804,6 +4810,7 @@ bool obs_source_add_active_child(obs_source_t *parent, obs_source_t *child)
 		type = (i < parent->activate_refs) ? MAIN_VIEW : AUX_VIEW;
 		obs_source_activate(child, type);
 	}
+	mark_audio_graph_dirty_from_topology();
 
 	return true;
 }
@@ -4820,6 +4827,7 @@ void obs_source_remove_active_child(obs_source_t *parent, obs_source_t *child)
 		type = (i < parent->activate_refs) ? MAIN_VIEW : AUX_VIEW;
 		obs_source_deactivate(child, type);
 	}
+	mark_audio_graph_dirty_from_topology();
 }
 
 void obs_source_save(obs_source_t *source)

@@ -422,9 +422,7 @@ ProgramAudioStrip::ProgramAudioStrip(QWidget *parent)
 	connect(&updateTimer, &QTimer::timeout, this, &ProgramAudioStrip::updateUi);
 
 	resetPublishedLevels();
-	refreshConnection();
 	updateStatus();
-	updateTimer.start();
 }
 
 ProgramAudioStrip::~ProgramAudioStrip()
@@ -435,6 +433,24 @@ ProgramAudioStrip::~ProgramAudioStrip()
 void ProgramAudioStrip::refreshColors()
 {
 	meter->refreshColors();
+}
+
+void ProgramAudioStrip::setMeteringEnabled(bool enabled)
+{
+	if (shuttingDown || meteringEnabled == enabled)
+		return;
+
+	meteringEnabled = enabled;
+	if (enabled) {
+		refreshConnection();
+		updateStatus();
+		updateTimer.start();
+	} else {
+		updateTimer.stop();
+		disconnectCallback();
+		resetPublishedLevels();
+		updateStatus();
+	}
 }
 
 void ProgramAudioStrip::shutdown()
@@ -465,6 +481,7 @@ void ProgramAudioStrip::rawAudioCallback(void *param, size_t, audio_data *data)
 	std::array<const float *, MAX_AUDIO_CHANNELS> samples{};
 	std::array<double, MAX_AUDIO_CHANNELS> sumSquares{};
 	std::array<float, MAX_AUDIO_CHANNELS> peaks{};
+	float callbackTruePeak = 0.0f;
 	for (uint32_t channel = 0; channel < channels; ++channel)
 		samples[channel] = reinterpret_cast<const float *>(data->data[channel]);
 
@@ -479,10 +496,12 @@ void ProgramAudioStrip::rawAudioCallback(void *param, size_t, audio_data *data)
 			peaks[channel] = std::max(peaks[channel], absolute);
 			sumSquares[channel] += static_cast<double>(sample) * sample;
 			programPower += strip->measurement->processLoudness(channel, sample);
-			strip->measurement->publishTruePeak(strip->measurement->processTruePeak(channel, sample));
+			callbackTruePeak =
+				std::max(callbackTruePeak, strip->measurement->processTruePeak(channel, sample));
 		}
 		strip->measurement->addProgramPower(programPower);
 	}
+	strip->measurement->publishTruePeak(callbackTruePeak);
 
 	for (uint32_t channel = 0; channel < channels; ++channel) {
 		const float rms = static_cast<float>(std::sqrt(sumSquares[channel] / frames));
@@ -495,7 +514,7 @@ void ProgramAudioStrip::rawAudioCallback(void *param, size_t, audio_data *data)
 
 void ProgramAudioStrip::refreshConnection()
 {
-	if (shuttingDown || !obs_initialized())
+	if (shuttingDown || !meteringEnabled || !obs_initialized())
 		return;
 
 	obs_audio_info audioInfo{};

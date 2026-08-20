@@ -19,6 +19,7 @@
 #include <stdlib.h>
 
 #include "obs.h"
+#include "obs-audio-optimized.h"
 #include "obs-internal.h"
 #include "graphics/vec4.h"
 #include "media-io/format-conversion.h"
@@ -30,11 +31,6 @@
 #include <avrt.h>      /* AvSetMmThreadCharacteristics / AvRevertMmThreadCharacteristics */
 #pragma comment(lib, "avrt.lib")
 #endif
-
-/* Forward declaration from obs-audio-optimized.c */
-extern void copy_video_plane_optimized(uint8_t *dst, const uint8_t *src,
-                                       uint32_t width, uint32_t height,
-                                       uint32_t dst_stride, uint32_t src_stride);
 
 static uint64_t tick_sources(uint64_t cur_time, uint64_t last_time)
 {

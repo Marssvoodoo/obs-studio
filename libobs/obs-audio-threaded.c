@@ -8,6 +8,7 @@
  ******************************************************************************/
 
 #include "obs-audio-threaded.h"
+#include "obs-audio-worker-sizing.h"
 #include "util/threading.h"
 #include <limits.h>
 #include "util/bmem.h"
@@ -22,21 +23,7 @@
 #endif
 
 /* ── Constants ───────────────────────────────────────────────────────────── */
-/* Hard ceiling on worker count regardless of core count. The audio render
- * graph rarely benefits past ~8 workers because per-source work is small
- * (~10–50 µs at 44.1/48 kHz @ 480 frames) and cond/mutex wake-up cost
- * (~3–5 µs per worker) dominates. Past 16 workers the wake-up overhead
- * starts to eat the parallelism gains. Tuned empirically; if you raise
- * this, also raise OBS_AUDIO_DEFAULT_WORKER_BUDGET so the per-source
- * count target keeps pace. */
-#ifndef OBS_AUDIO_MAX_THREADS
-#define OBS_AUDIO_MAX_THREADS 16u
-#endif
 #define MAX_THREADS OBS_AUDIO_MAX_THREADS
-/* Approximate target sources-per-worker. Used to clamp num_threads on
- * machines with many more cores than active sources, so an idle 64-core
- * Threadripper doesn't wake 16 workers 60×/sec for a 2-source scene. */
-#define OBS_AUDIO_DEFAULT_WORKER_BUDGET 4u
 
 /* ── Thread pool ─────────────────────────────────────────────────────────── */
 struct obs_audio_threadpool {
@@ -172,18 +159,22 @@ static void *worker_thread(void *arg)
 
 /* ── Public API ──────────────────────────────────────────────────────────── */
 
+size_t obs_audio_threadpool_recommended_threads(size_t logical_cores,
+						 size_t expected_jobs)
+{
+	return obs_audio_threadpool_recommended_threads_impl(logical_cores, expected_jobs);
+}
+
 struct obs_audio_threadpool *obs_audio_threadpool_create(size_t num_threads,
 							 size_t queue_cap)
 {
-	UNUSED_PARAMETER(queue_cap);
-
 	if (num_threads == 0) {
-		size_t cores = (size_t)os_get_logical_cores();
-		if (cores <= 1)
+		num_threads = obs_audio_threadpool_recommended_threads(
+			(size_t)os_get_logical_cores(), queue_cap);
+		if (num_threads == 0)
 			return NULL;
-		num_threads = cores - 1;
-		if (num_threads > MAX_THREADS)
-			num_threads = MAX_THREADS;
+	} else if (num_threads > MAX_THREADS) {
+		num_threads = MAX_THREADS;
 	}
 
 	struct obs_audio_threadpool *pool =

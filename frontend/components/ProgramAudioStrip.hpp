@@ -22,6 +22,7 @@ public:
 	~ProgramAudioStrip() override;
 
 	void refreshColors();
+	void setMeteringEnabled(bool enabled);
 	void shutdown();
 
 private:
@@ -65,6 +66,7 @@ private:
 	speaker_layout connectedSpeakers{SPEAKERS_UNKNOWN};
 	uint32_t connectedChannels{0};
 	bool callbackConnected{false};
+	bool meteringEnabled{false};
 	bool shuttingDown{false};
 	bool outputWasActive{false};
 	QString currentStatusState;

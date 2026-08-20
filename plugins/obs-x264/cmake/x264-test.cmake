@@ -7,5 +7,12 @@ target_compile_options(obs-x264-test PRIVATE $<$<COMPILE_LANG_AND_ID:C,AppleClan
 target_link_libraries(obs-x264-test PRIVATE OBS::opts-parser)
 
 add_test(NAME obs-x264-test COMMAND obs-x264-test)
+if(OS_WINDOWS)
+  set_tests_properties(
+    obs-x264-test
+    PROPERTIES ENVIRONMENT_MODIFICATION
+               "PATH=path_list_prepend:${OBS_OUTPUT_DIR}/$<CONFIG>/${OBS_EXECUTABLE_DESTINATION}"
+  )
+endif()
 
 set_target_properties(obs-x264-test PROPERTIES FOLDER plugins/obs-x264)

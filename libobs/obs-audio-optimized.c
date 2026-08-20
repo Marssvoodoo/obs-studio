@@ -1,9 +1,9 @@
 /******************************************************************************
     OBS Studio - Audio Pipeline Optimizations
-    
+
     This file contains optimized versions of performance-critical audio
     functions with SIMD intrinsics for better performance.
-    
+
     Optimizations:
     - Vectorized audio mixing (SSE2/AVX)
     - Prefetching for better cache utilization
@@ -14,7 +14,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "obs-audio-optimized.h"
 #include "obs-internal.h"
+#include "obs-video-overlap.h"
+#include "util/bmem.h"
 #include "util/threading.h"
 #include "util/util_uint64.h"
 #include "util/sse-intrin.h"
@@ -92,7 +95,7 @@ static bool cpu_supports_avx2(void)
 /**
  * Optimized audio mixing using SSE2 intrinsics
  * Processes 4 floats at a time instead of 1
- * 
+ *
  * @param mix      Destination mix buffer (16-byte aligned preferred)
  * @param aud      Source audio buffer (16-byte aligned preferred)
  * @param count    Number of floats to mix
@@ -220,33 +223,44 @@ void copy_video_plane_optimized(uint8_t *dst, const uint8_t *src,
 		return;
 	}
 
-	/* Detect overlap and fall back to memmove (line-by-line). The SIMD
-	 * paths below assume non-overlapping buffers. We compare via uintptr_t
-	 * casts rather than raw pointer relational ops, which is well-defined
-	 * across unrelated allocations on flat address spaces (x86-64, ARM64).
-	 * Check the full-extent byte ranges so legitimate back-to-back
-	 * single-line buffers don't trip the fallback. */
-	{
-		const uint8_t *src_end = src + (size_t)(height - 1) * src_stride + width;
-		const uint8_t *dst_end = dst + (size_t)(height - 1) * dst_stride + width;
-		const bool overlap = !((uintptr_t)dst >= (uintptr_t)src_end ||
-				       (uintptr_t)src >= (uintptr_t)dst_end);
-		if (overlap) {
-			for (uint32_t y = 0; y < height; y++) {
-				const uint8_t *src_line = src + (size_t)y * src_stride;
-				uint8_t *dst_line = dst + (size_t)y * dst_stride;
-				memmove(dst_line, src_line, width);
-			}
-			return;
-		}
-	}
-	if ((size_t)src_stride > SIZE_MAX / height ||
-	    (size_t)dst_stride > SIZE_MAX / height) {
+	const size_t last_row = (size_t)height - 1;
+	if (last_row > (SIZE_MAX - width) / src_stride ||
+	    last_row > (SIZE_MAX - width) / dst_stride) {
 		blog(LOG_ERROR,
-		     "copy_video_plane_optimized: stride*height would overflow "
+		     "copy_video_plane_optimized: plane extent would overflow "
 		     "(h=%u dst_stride=%u src_stride=%u) — copy skipped",
 		     height, dst_stride, src_stride);
 		return;
+	}
+
+	/* SIMD paths require disjoint buffers. A row-by-row memmove is not safe
+	 * when a write can overwrite a later source row, so stage the entire
+	 * visible plane before writing any destination bytes. */
+	{
+		const size_t src_extent = last_row * src_stride + width;
+		const size_t dst_extent = last_row * dst_stride + width;
+		const uintptr_t src_start = (uintptr_t)src;
+		const uintptr_t dst_start = (uintptr_t)dst;
+		if (src_start > UINTPTR_MAX - src_extent || dst_start > UINTPTR_MAX - dst_extent) {
+			blog(LOG_ERROR, "copy_video_plane_optimized: address range would overflow — copy skipped");
+			return;
+		}
+
+		const uintptr_t src_end = src_start + src_extent;
+		const uintptr_t dst_end = dst_start + dst_extent;
+		const bool overlap = !(dst_start >= src_end || src_start >= dst_end);
+		if (overlap) {
+			if ((size_t)height > SIZE_MAX / width) {
+				blog(LOG_ERROR, "copy_video_plane_optimized: packed plane size would overflow — copy skipped");
+				return;
+			}
+
+			const size_t packed_size = (size_t)width * height;
+			uint8_t *overlap_buffer = bmalloc(packed_size);
+			obs_copy_overlapping_video_plane(dst, src, width, height, dst_stride, src_stride, overlap_buffer);
+			bfree(overlap_buffer);
+			return;
+		}
 	}
 
 #if !OBS_X86_SIMD

@@ -44,8 +44,8 @@ target_sources(libobs PRIVATE
 
 #### A. Optimized Audio Mixing
 
-**File**: `libobs/obs-audio.c`  
-**Function**: `mix_audio()`  
+**File**: `libobs/obs-audio.c`
+**Function**: `mix_audio()`
 **Line**: ~55
 
 **Current code:**
@@ -80,7 +80,7 @@ mix_audio_optimized(mixes, channels, source->audio_output_buf, start_point, tota
 
 #### B. Optimized Video Frame Copying
 
-**File**: `libobs/obs-video.c`  
+**File**: `libobs/obs-video.c`
 **Function**: `set_gpu_converted_plane()` and `copy_rgbx_frame()`
 
 **Add at file top:**
@@ -115,7 +115,7 @@ in += (size_t)linesize_input * (size_t)height;
 
 #### C. Fast Zero-Fill for Audio Buffers
 
-**File**: `libobs/obs-audio.c`  
+**File**: `libobs/obs-audio.c`
 **Various locations using memset on float buffers**
 
 **Add declaration:**
@@ -253,7 +253,7 @@ vtune -collect hotspots -- obs64.exe
 ### Issue: Compilation Errors
 
 **Problem**: Missing SIMD intrinsics headers
-**Solution**: 
+**Solution**:
 ```c
 // Add platform-specific includes
 #ifdef _MSC_VER
@@ -267,7 +267,7 @@ vtune -collect hotspots -- obs64.exe
 ### Issue: Runtime Crashes
 
 **Problem**: Unaligned memory access
-**Solution**: 
+**Solution**:
 - Use `_mm_loadu_ps()` instead of `_mm_load_ps()`
 - Ensure buffers are properly allocated
 - Check buffer sizes are multiples of 4
@@ -374,6 +374,6 @@ For issues or questions:
 
 ---
 
-**Last Updated**: February 17, 2026  
-**Version**: 1.0  
+**Last Updated**: February 17, 2026
+**Version**: 1.0
 **Optimization Level**: Phase 1 (Quick Wins)

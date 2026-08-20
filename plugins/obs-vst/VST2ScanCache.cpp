@@ -335,3 +335,15 @@ bool vst2_scan_results_save(const char *path, const std::vector<VST2ScanResult> 
 	obs_data_release(root);
 	return saved;
 }
+
+bool vst2_scan_result_passed(const std::vector<VST2ScanResult> &results, const std::string &pluginPath)
+{
+	if (!vst2_is_allowed_plugin_path(pluginPath)) {
+		return false;
+	}
+
+	const std::string requestedIdentity = pathIdentity(pluginPath);
+	return std::any_of(results.begin(), results.end(), [&](const VST2ScanResult &result) {
+		return result.status == "passed" && pathIdentity(result.path) == requestedIdentity;
+	});
+}
