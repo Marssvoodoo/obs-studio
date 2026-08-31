@@ -9,6 +9,7 @@ the Free Software Foundation, either version 2 of the License, or
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,8 @@ struct VST2ScanResult {
 	std::string path;
 	std::string status;
 	std::string reason;
+	std::uint64_t fileSize = 0;
+	std::string sha256;
 };
 
 std::vector<std::string> vst2_default_search_paths();

@@ -63,6 +63,8 @@ jobs:
           BOUF_TAG: v0.6.5
           BOUF_HASH: 2e16d5116415579b5dd8cd68b3fe6edaa7513938427567121942f592292605d5
           BOUF_NSIS_HASH: e323043627cfeebd237d306afc001c8c36a3c37f6ecef2b349a19a3209ae3450
+          NSIS_URL: https://sourceforge.net/projects/nsis/files/NSIS%203/3.12/nsis-3.12-setup.exe/download
+          NSIS_HASH: 3bc2b06253a7e4957111be152ac6a536e0c7478a706e19da814038db5d706495
         run: |
           New-Item -ItemType Directory -Path bouf -Force | Out-Null
           Push-Location bouf
@@ -82,8 +84,19 @@ jobs:
           Expand-Archive -LiteralPath $nsisArchive -DestinationPath nsis
           Pop-Location
 
-          winget install --silent --accept-package-agreements --accept-source-agreements `
-            --disable-interactivity -e --id NSIS.NSIS
+          $nsisInstaller = Join-Path $env:RUNNER_TEMP 'nsis-3.12-setup.exe'
+          Invoke-WebRequest -Uri $env:NSIS_URL -OutFile $nsisInstaller -UseBasicParsing
+          if ((Get-FileHash -LiteralPath $nsisInstaller -Algorithm SHA256).Hash -ne $env:NSIS_HASH) {
+            throw 'NSIS installer hash does not match.'
+          }
+          $process = Start-Process -FilePath $nsisInstaller -ArgumentList '/S' -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "NSIS installer exited with code $($process.ExitCode)."
+          }
+          $makensis = Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'
+          if (!(Test-Path -LiteralPath $makensis) -or ((& $makensis /VERSION).Trim() -ne 'v3.12')) {
+            throw 'NSIS 3.12 was not installed as expected.'
+          }
 
       - name: Build Unsigned Windows Packages
         run: |

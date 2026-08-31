@@ -429,6 +429,10 @@ jobs:
           target: ${{ matrix.architecture }}
           config: ${{ needs.check-event.outputs.config }}
 
+      - name: Run Windows CTest Regression Suite 🧪
+        if: matrix.architecture == 'x64'
+        run: ctest --test-dir build_x64 -C '${{ needs.check-event.outputs.config }}' --output-on-failure
+
       - name: Package OBS Studio 📀
         uses: ./.github/actions/package-obs
         if: ${{ fromJSON(needs.check-event.outputs.package) }}

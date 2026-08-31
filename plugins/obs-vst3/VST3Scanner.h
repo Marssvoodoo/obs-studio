@@ -19,6 +19,7 @@
 
 #include "public.sdk/source/vst/moduleinfo/moduleinfo.h"
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -34,6 +35,8 @@ struct VST3ClassInfo {
 	std::string id;
 	std::string path;
 	std::string pluginName;
+	std::uint64_t fileSize = 0;
+	std::string sha256;
 	bool discardable; // Optional but requested to us by Steinberg: the classes need to be reloaded from the module at each host startup and can not be cached (ex: Waves plugins).
 };
 
@@ -48,6 +51,7 @@ public:
 	bool isAllowedModulePath(const std::string &modulePath) const;
 	std::string getNameById(const std::string &class_id) const;
 	std::string getPathById(const std::string &class_id) const;
+	bool hasCurrentFingerprint(const std::string &class_id) const;
 	bool moduleHasMultipleClasses(const std::string &bundlePath) const;
 	bool addModuleClasses(const std::string &bundlePath);
 	bool scanModule(const std::string &bundlePath);

@@ -9,6 +9,8 @@ the Free Software Foundation, either version 2 of the License, or
 
 #include "VST2ScanCache.hpp"
 
+#include <PluginPathFingerprint.hpp>
+
 #include <obs-data.h>
 #include <util/platform.h>
 
@@ -123,9 +125,11 @@ bool validateResult(VST2ScanResult &result)
 	if (result.name.empty()) {
 		result.name = std::filesystem::u8path(result.path).stem().u8string();
 	}
+	const PluginPathFingerprint fingerprint{result.fileSize, result.sha256};
+	const bool validFingerprint = result.status != "passed" || plugin_path_fingerprint_is_valid(fingerprint);
 	return result.name.size() <= 1024 && result.vendor.size() <= 1024 && result.reason.size() <= 1024 &&
 	       result.path.size() <= 32768 && !hasControlCharacters(result.path) && validStatus(result.status) &&
-	       vst2_is_allowed_plugin_path(result.path);
+	       validFingerprint && vst2_is_allowed_plugin_path(result.path);
 }
 } // namespace
 
@@ -264,7 +268,7 @@ bool vst2_scan_results_load(const char *path, std::vector<VST2ScanResult> &resul
 
 	obs_data_t *root = safeBackup ? obs_data_create_from_json_file_safe(path, "bak")
 				      : obs_data_create_from_json_file(path);
-	if (!root || obs_data_get_int(root, "version") != 1 ||
+	if (!root || obs_data_get_int(root, "version") != 2 ||
 	    std::string(obs_data_get_string(root, "format")) != "VST2") {
 		if (root)
 			obs_data_release(root);
@@ -292,6 +296,11 @@ bool vst2_scan_results_load(const char *path, std::vector<VST2ScanResult> &resul
 		result.path = obs_data_get_string(item, "path");
 		result.status = obs_data_get_string(item, "status");
 		result.reason = obs_data_get_string(item, "reason");
+		const long long storedSize = obs_data_get_int(item, "fileSize");
+		if (storedSize >= 0) {
+			result.fileSize = static_cast<std::uint64_t>(storedSize);
+		}
+		result.sha256 = obs_data_get_string(item, "sha256");
 		obs_data_release(item);
 		if (validateResult(result) && seen.emplace(pathIdentity(result.path)).second) {
 			loaded.emplace_back(std::move(result));
@@ -324,10 +333,12 @@ bool vst2_scan_results_save(const char *path, const std::vector<VST2ScanResult> 
 		obs_data_set_string(item, "path", result.path.c_str());
 		obs_data_set_string(item, "status", result.status.c_str());
 		obs_data_set_string(item, "reason", result.reason.c_str());
+		obs_data_set_int(item, "fileSize", static_cast<long long>(result.fileSize));
+		obs_data_set_string(item, "sha256", result.sha256.c_str());
 		obs_data_array_push_back(array, item);
 		obs_data_release(item);
 	}
-	obs_data_set_int(root, "version", 1);
+	obs_data_set_int(root, "version", 2);
 	obs_data_set_string(root, "format", "VST2");
 	obs_data_set_array(root, "results", array);
 	obs_data_array_release(array);
@@ -344,6 +355,8 @@ bool vst2_scan_result_passed(const std::vector<VST2ScanResult> &results, const s
 
 	const std::string requestedIdentity = pathIdentity(pluginPath);
 	return std::any_of(results.begin(), results.end(), [&](const VST2ScanResult &result) {
-		return result.status == "passed" && pathIdentity(result.path) == requestedIdentity;
+		const PluginPathFingerprint expected{result.fileSize, result.sha256};
+		return result.status == "passed" && pathIdentity(result.path) == requestedIdentity &&
+		       plugin_path_fingerprint_matches(pluginPath, expected);
 	});
 }

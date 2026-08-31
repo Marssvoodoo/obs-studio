@@ -11,10 +11,13 @@
 
 #include "VST3Scanner.h"
 
+#include <PluginPathFingerprint.hpp>
+
 #include <obs-data.h>
 #include <util/platform.h>
 
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace {
@@ -42,7 +45,7 @@ bool vst3_list_load_json(VST3Scanner &scanner, const char *path, bool safeBackup
 		return false;
 	}
 
-	if (obs_data_get_int(root, "version") != 1) {
+	if (obs_data_get_int(root, "version") != 2) {
 		obs_data_release(root);
 		return false;
 	}
@@ -62,6 +65,7 @@ bool vst3_list_load_json(VST3Scanner &scanner, const char *path, bool safeBackup
 
 	VST3Scanner loaded;
 	std::unordered_set<std::string> seen;
+	std::unordered_map<std::string, bool> fingerprintMatches;
 	bool rejectedEntry = false;
 	seen.reserve(count);
 	for (size_t index = 0; index < count; ++index) {
@@ -75,11 +79,23 @@ bool vst3_list_load_json(VST3Scanner &scanner, const char *path, bool safeBackup
 		entry.id = obs_data_get_string(object, "id");
 		entry.path = obs_data_get_string(object, "path");
 		entry.pluginName = obs_data_get_string(object, "pluginName");
+		const long long storedSize = obs_data_get_int(object, "fileSize");
+		if (storedSize >= 0) {
+			entry.fileSize = static_cast<std::uint64_t>(storedSize);
+		}
+		entry.sha256 = obs_data_get_string(object, "sha256");
 		entry.discardable = obs_data_get_bool(object, "discardable");
 		obs_data_release(object);
 
+		const PluginPathFingerprint expected{entry.fileSize, entry.sha256};
+		const std::string fingerprintKey =
+			entry.path + '\0' + std::to_string(entry.fileSize) + '\0' + entry.sha256;
+		auto [fingerprint, inserted] = fingerprintMatches.try_emplace(fingerprintKey, false);
+		if (inserted && plugin_path_fingerprint_is_valid(expected)) {
+			fingerprint->second = plugin_path_fingerprint_matches(entry.path, expected);
+		}
 		if ((!includeDiscardable && entry.discardable) || !vst3_validate_and_sanitize_class_info(entry) ||
-		    !loaded.isAllowedModulePath(entry.path)) {
+		    !loaded.isAllowedModulePath(entry.path) || !fingerprint->second) {
 			rejectedEntry = true;
 			continue;
 		}
@@ -116,8 +132,9 @@ bool vst3_list_save_json(const VST3Scanner &scanner, const char *path, const cha
 	obs_data_array_t *plugins = obs_data_array_create();
 	for (const auto &sourceEntry : scanner.pluginList) {
 		VST3ClassInfo entry = sourceEntry;
+		const PluginPathFingerprint fingerprint{entry.fileSize, entry.sha256};
 		if ((!includeDiscardable && entry.discardable) || !vst3_validate_and_sanitize_class_info(entry) ||
-		    !scanner.isAllowedModulePath(entry.path)) {
+		    !scanner.isAllowedModulePath(entry.path) || !plugin_path_fingerprint_is_valid(fingerprint)) {
 			continue;
 		}
 
@@ -126,12 +143,14 @@ bool vst3_list_save_json(const VST3Scanner &scanner, const char *path, const cha
 		obs_data_set_string(object, "id", entry.id.c_str());
 		obs_data_set_string(object, "path", entry.path.c_str());
 		obs_data_set_string(object, "pluginName", entry.pluginName.c_str());
+		obs_data_set_int(object, "fileSize", static_cast<long long>(entry.fileSize));
+		obs_data_set_string(object, "sha256", entry.sha256.c_str());
 		obs_data_set_bool(object, "discardable", entry.discardable);
 		obs_data_array_push_back(plugins, object);
 		obs_data_release(object);
 	}
 
-	obs_data_set_int(root, "version", 1);
+	obs_data_set_int(root, "version", 2);
 	obs_data_set_array(root, "plugins", plugins);
 	obs_data_array_release(plugins);
 

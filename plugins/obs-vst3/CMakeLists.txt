@@ -7,7 +7,7 @@ if(NOT ENABLE_VST3)
   return()
 endif()
 
-find_package(Qt6 REQUIRED Widgets)
+find_package(Qt6 REQUIRED Core Widgets)
 find_package(VST3SDK QUIET)
 
 if(NOT VST3SDK_FOUND)
@@ -29,6 +29,7 @@ target_sources(
   obs-vst3-hosting
   PRIVATE
     ${VST3_SDK_SOURCES}
+    "${CMAKE_SOURCE_DIR}/shared/plugin-path-fingerprint/PluginPathFingerprint.cpp"
     VST3Cache.cpp
     VST3Cache.h
     VST3Scanner.cpp
@@ -39,6 +40,7 @@ target_include_directories(
   obs-vst3-hosting
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/shared/plugin-path-fingerprint
     ${VST3SDK_PATH}
     ${VST3SDK_PATH}/base
     ${VST3SDK_PATH}/pluginterfaces
@@ -47,7 +49,7 @@ target_include_directories(
     ${VST3SDK_PATH}/public.sdk/source/vst/utility
 )
 
-target_link_libraries(obs-vst3-hosting PUBLIC OBS::libobs VST3::SDK)
+target_link_libraries(obs-vst3-hosting PUBLIC OBS::libobs Qt::Core VST3::SDK)
 set_target_properties(obs-vst3-hosting PROPERTIES FOLDER plugins/obs-vst3 POSITION_INDEPENDENT_CODE ON)
 
 add_executable(obs-vst3-scanner)

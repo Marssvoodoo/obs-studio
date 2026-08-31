@@ -167,6 +167,7 @@
       "generator": "Visual Studio 18 2026",
       "cacheVariables": {
         "GPU_PRIORITY_VAL": {"type": "STRING", "value": "$penv{GPU_PRIORITY_VAL}"},
+        "OBS_VERSION_OVERRIDE": {"type": "STRING", "value": "32.2.2-perf"},
         "VIRTUALCAM_GUID": {"type": "STRING", "value": "A3FCE0F5-3493-419F-958A-ABA1250EC20B"},
         "ENABLE_BROWSER": true
       }

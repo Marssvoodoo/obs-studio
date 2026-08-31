@@ -18,6 +18,8 @@ the Free Software Foundation, either version 2 of the License, or
 #include "VST2ScanCache.hpp"
 #include "headers/vst-plugin-callbacks.hpp"
 
+#include <PluginPathFingerprint.hpp>
+
 #include <obs-data.h>
 
 #include <algorithm>
@@ -266,6 +268,16 @@ int scanSingleModule(const std::filesystem::path &modulePath, const std::filesys
 		}
 	}
 	FreeLibrary(library);
+	if (result.status == "passed") {
+		PluginPathFingerprint fingerprint;
+		if (!plugin_path_fingerprint(result.path, fingerprint)) {
+			result.status = "failed";
+			result.reason = "The validated module could not be fingerprinted.";
+		} else {
+			result.fileSize = fingerprint.size;
+			result.sha256 = std::move(fingerprint.sha256);
+		}
+	}
 	return vst2_scan_results_save(outputPath.u8string().c_str(), {result}) ? 0 : 5;
 }
 

@@ -31,6 +31,7 @@
 #include <QCoreApplication>
 
 #include "VST3Cache.h"
+#include "VST3BufferLayout.hpp"
 #include "VST3HostApp.h"
 #include "VST3Plugin.h"
 #include "VST3Scanner.h"
@@ -900,6 +901,16 @@ static void vst3_update(void *data, obs_data_t *settings)
 			vd->has_sidechain.store(false, std::memory_order_relaxed);
 			return;
 		}
+		if (!available_plugins->hasCurrentFingerprint(vst3_plugin_id)) {
+			warnvst3("Refusing a VST3 plug-in whose content changed after its passed scan");
+			vd->vst3_id.clear();
+			vd->vst3_path.clear();
+			vd->vst3_name.clear();
+			vd->last_init_failed = true;
+			vd->bypass.store(true, std::memory_order_release);
+			vd->has_sidechain.store(false, std::memory_order_relaxed);
+			return;
+		}
 		vd->vst3_path = discovered_path;
 		vd->vst3_name = available_plugins->getNameById(vst3_plugin_id);
 		if (vd->vst3_name.empty()) {
@@ -1270,10 +1281,19 @@ static struct obs_audio_data *vst3_filter_audio(void *data, struct obs_audio_dat
 
 	/* if there's enough audio data buffered in the output deque, pop and return a packet */
 	deque_pop_front(&vd->info_buffer, NULL, sizeof(info));
-	da_resize(vd->output_data, out_size * vd->channels);
+	size_t outputFloatCount = 0;
+	if (!vst3_output_float_count(info.frames, vd->channels, outputFloatCount)) {
+		reset_data(vd);
+		vd->process_failed.store(true, std::memory_order_release);
+		vd->process_failure_pending.store(true, std::memory_order_release);
+		vd->bypass.store(true, std::memory_order_release);
+		return audio;
+	}
+	da_resize(vd->output_data, outputFloatCount);
 
 	for (size_t i = 0; i < vd->channels; i++) {
-		vd->output_audio.data[i] = (uint8_t *)&vd->output_data.array[i * out_size];
+		vd->output_audio.data[i] =
+			(uint8_t *)&vd->output_data.array[vst3_output_channel_offset(info.frames, i)];
 
 		deque_pop_front(&vd->output_buffers[i], vd->output_audio.data[i], out_size);
 	}

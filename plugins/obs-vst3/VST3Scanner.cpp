@@ -17,6 +17,8 @@
 
 #include "VST3Scanner.h"
 
+#include <PluginPathFingerprint.hpp>
+
 #include "public.sdk/source/vst/hosting/module.h"
 #include "public.sdk/source/vst/moduleinfo/moduleinfoparser.h"
 
@@ -28,6 +30,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <unordered_map>
 #include <utility>
 
 namespace {
@@ -422,8 +425,24 @@ bool VST3Scanner::scanModule(const std::string &bundlePath)
 		return false;
 	}
 
+	const size_t firstAdded = pluginList.size();
 	try {
-		return tryReadModuleInfo(bundlePath) || addModuleClasses(bundlePath);
+		if (!(tryReadModuleInfo(bundlePath) || addModuleClasses(bundlePath))) {
+			return false;
+		}
+
+		std::unordered_map<std::string, PluginPathFingerprint> fingerprints;
+		for (size_t index = firstAdded; index < pluginList.size(); ++index) {
+			auto [iterator, inserted] = fingerprints.try_emplace(pluginList[index].path);
+			if (inserted && !plugin_path_fingerprint(pluginList[index].path, iterator->second)) {
+				pluginList.resize(firstAdded);
+				sort();
+				return false;
+			}
+			pluginList[index].fileSize = iterator->second.size;
+			pluginList[index].sha256 = iterator->second.sha256;
+		}
+		return true;
 	} catch (const std::exception &error) {
 		const std::string message = vst3_sanitize_display_text(error.what());
 		blog(LOG_ERROR, "[VST3 Scanner] Skipping %s after an exception: %.1024s", bundlePath.c_str(),
@@ -476,4 +495,15 @@ std::string VST3Scanner::getPathById(const std::string &class_id) const
 		}
 	}
 	return {};
+}
+
+bool VST3Scanner::hasCurrentFingerprint(const std::string &class_id) const
+{
+	for (const auto &entry : pluginList) {
+		if (entry.id == class_id) {
+			const PluginPathFingerprint expected{entry.fileSize, entry.sha256};
+			return plugin_path_fingerprint_matches(entry.path, expected);
+		}
+	}
+	return false;
 }
