@@ -17,8 +17,6 @@
 
 #pragma once
 
-#include "public.sdk/source/vst/moduleinfo/moduleinfo.h"
-
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -62,6 +60,4 @@ public:
 
 private:
 	std::unordered_set<std::string> getVST3Paths();
-	bool tryReadModuleInfo(const std::string &bundlePath);
-	bool loadFromModuleInfo(const Steinberg::ModuleInfo &info, const std::string &bundlePath);
 };

@@ -32,6 +32,8 @@ target_sources(
     "${CMAKE_SOURCE_DIR}/shared/plugin-path-fingerprint/PluginPathFingerprint.cpp"
     VST3Cache.cpp
     VST3Cache.h
+    VST3HostApp.cpp
+    VST3HostApp.h
     VST3Scanner.cpp
     VST3Scanner.h
 )
@@ -67,8 +69,6 @@ target_sources(
     VST3ComponentHolder.cpp
     VST3ComponentHolder.h
     VST3EditorWindow.h
-    VST3HostApp.cpp
-    VST3HostApp.h
     VST3Plugin.cpp
     VST3Plugin.h
 )

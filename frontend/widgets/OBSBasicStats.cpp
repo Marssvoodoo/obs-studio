@@ -1,6 +1,7 @@
 #include "OBSBasicStats.hpp"
 
 #include <widgets/OBSBasic.hpp>
+#include <utility/NativeTelemetryGuard.hpp>
 
 #include <qt-wrappers.hpp>
 
@@ -14,6 +15,7 @@
 #include <QVBoxLayout>
 
 #include <cstring>
+#include <utility>
 
 #ifdef _WIN32
 #include <util/windows/ComPtr.hpp>
@@ -57,20 +59,24 @@ constexpr int CUDA_SUCCESS_OK = 0;
 static bool selectedAdapterLuid(LUID &luid)
 {
 	obs_video_info videoInfo{};
-	if (!obs_get_video_info(&videoInfo))
+	if (!obs_get_video_info(&videoInfo)) {
 		return false;
+	}
 
 	ComPtr<IDXGIFactory1> factory;
-	if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))))
+	if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
 		return false;
+	}
 
 	ComPtr<IDXGIAdapter1> adapter;
-	if (factory->EnumAdapters1(videoInfo.adapter, adapter.Assign()) != S_OK)
+	if (factory->EnumAdapters1(videoInfo.adapter, adapter.Assign()) != S_OK) {
 		return false;
+	}
 
 	DXGI_ADAPTER_DESC1 description{};
-	if (FAILED(adapter->GetDesc1(&description)))
+	if (FAILED(adapter->GetDesc1(&description))) {
 		return false;
+	}
 
 	luid = description.AdapterLuid;
 	return true;
@@ -79,8 +85,9 @@ static bool selectedAdapterLuid(LUID &luid)
 static bool cudaPciBusIdForLuid(const LUID &selectedLuid, char *pciBusId, int pciBusIdSize)
 {
 	HMODULE cuda = LoadLibraryExW(L"nvcuda.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-	if (!cuda)
+	if (!cuda) {
 		return false;
+	}
 
 	using CUdevice = int;
 	using CuInit = int(WINAPI *)(unsigned int);
@@ -93,8 +100,7 @@ static bool cudaPciBusIdForLuid(const LUID &selectedLuid, char *pciBusId, int pc
 	auto cuDeviceGetCount = reinterpret_cast<CuDeviceGetCount>(GetProcAddress(cuda, "cuDeviceGetCount"));
 	auto cuDeviceGet = reinterpret_cast<CuDeviceGet>(GetProcAddress(cuda, "cuDeviceGet"));
 	auto cuDeviceGetLuid = reinterpret_cast<CuDeviceGetLuid>(GetProcAddress(cuda, "cuDeviceGetLuid"));
-	auto cuDeviceGetPciBusId =
-		reinterpret_cast<CuDeviceGetPciBusId>(GetProcAddress(cuda, "cuDeviceGetPCIBusId"));
+	auto cuDeviceGetPciBusId = reinterpret_cast<CuDeviceGetPciBusId>(GetProcAddress(cuda, "cuDeviceGetPCIBusId"));
 
 	bool matched = false;
 	if (cuInit && cuDeviceGetCount && cuDeviceGet && cuDeviceGetLuid && cuDeviceGetPciBusId &&
@@ -127,12 +133,16 @@ public:
 	NVMLClient()
 	{
 #ifdef _WIN32
-		lib = LoadLibraryExW(L"nvml.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+		call([&] {
+			lib = LoadLibraryExW(L"nvml.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+			return lib != nullptr;
+		});
 #elif defined(__linux__)
 		lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY | RTLD_LOCAL);
 #endif
-		if (!lib)
+		if (!lib) {
 			return;
+		}
 
 		auto sym = [&](const char *name) -> void * {
 #ifdef _WIN32
@@ -157,20 +167,24 @@ public:
 		getMemory = reinterpret_cast<decltype(getMemory)>(sym("nvmlDeviceGetMemoryInfo"));
 		getTemp = reinterpret_cast<decltype(getTemp)>(sym("nvmlDeviceGetTemperature"));
 
-		if (!init || !shutdown_ || !getUtil || !getMemory || !getTemp)
+		if (!init || !shutdown_ || !getUtil || !getMemory || !getTemp) {
 			return;
+		}
 #ifdef _WIN32
-		if (!getHandleByPciBusId)
+		if (!getHandleByPciBusId) {
 			return;
+		}
 #elif defined(__linux__)
-		if (!getHandleByIndex)
+		if (!getHandleByIndex) {
 			return;
+		}
 #endif
-		if (init() != NVML_SUCCESS_OK)
+		if (!call([&] { return init() == NVML_SUCCESS_OK; })) {
 			return;
+		}
 		initialized = true;
-		if (!resolveSelectedDevice()) {
-			shutdown_();
+		if (!call([&] { return resolveSelectedDevice(); })) {
+			call([&] { return shutdown_() == NVML_SUCCESS_OK; });
 			initialized = false;
 			return;
 		}
@@ -179,37 +193,49 @@ public:
 
 	~NVMLClient()
 	{
-		if (initialized && shutdown_)
-			shutdown_();
+		if (initialized && shutdown_) {
+			call([&] { return shutdown_() == NVML_SUCCESS_OK; });
+		}
+		// After a driver fault, even shutdown or DLL detach can fault again.
+		// Retain the library until process exit instead of re-entering it.
+		if (guard.disabled()) {
+			return;
+		}
 #ifdef _WIN32
-		if (lib)
-			FreeLibrary(static_cast<HMODULE>(lib));
+		if (lib) {
+			call([&] { return FreeLibrary(static_cast<HMODULE>(lib)) != FALSE; });
+		}
 #elif defined(__linux__)
-		if (lib)
+		if (lib) {
 			dlclose(lib);
+		}
 #endif
 	}
 
-	bool available() const { return ok; }
+	bool available() const { return ok && !guard.disabled(); }
 
 	bool sampleUtilization(unsigned int &gpu_pct)
 	{
-		if (!ok)
+		if (!available()) {
 			return false;
+		}
 		nvmlUtilization_t u{};
-		if (getUtil(device, &u) != NVML_SUCCESS_OK)
+		if (!call([&] { return getUtil(device, &u) == NVML_SUCCESS_OK; })) {
 			return false;
+		}
 		gpu_pct = u.gpu;
 		return true;
 	}
 
 	bool sampleMemory(unsigned long long &used_bytes, unsigned long long &total_bytes)
 	{
-		if (!ok)
+		if (!available()) {
 			return false;
+		}
 		nvmlMemory_t m{};
-		if (getMemory(device, &m) != NVML_SUCCESS_OK)
+		if (!call([&] { return getMemory(device, &m) == NVML_SUCCESS_OK; })) {
 			return false;
+		}
 		used_bytes = m.used;
 		total_bytes = m.total;
 		return true;
@@ -217,16 +243,29 @@ public:
 
 	bool sampleTemperature(unsigned int &celsius)
 	{
-		if (!ok)
+		if (!available()) {
 			return false;
+		}
 		unsigned int t = 0;
-		if (getTemp(device, NVML_TEMPERATURE_GPU_SENSOR, &t) != NVML_SUCCESS_OK)
+		if (!call([&] { return getTemp(device, NVML_TEMPERATURE_GPU_SENSOR, &t) == NVML_SUCCESS_OK; })) {
 			return false;
+		}
 		celsius = t;
 		return true;
 	}
 
 private:
+	template<typename Operation> bool call(Operation &&operation)
+	{
+		const bool alreadyDisabled = guard.disabled();
+		const bool result = guard.call(std::forward<Operation>(operation));
+		if (!alreadyDisabled && guard.disabled()) {
+			blog(LOG_WARNING, "[GPU Stats] NVIDIA telemetry disabled after native fault 0x%08lx",
+			     static_cast<unsigned long>(guard.faultCode()));
+		}
+		return result;
+	}
+
 	bool resolveSelectedDevice()
 	{
 #ifdef _WIN32
@@ -246,6 +285,7 @@ private:
 #endif
 	}
 
+	NativeTelemetryGuard guard;
 	void *lib = nullptr;
 	bool ok = false;
 	bool initialized = false;
@@ -325,8 +365,7 @@ OBSBasicStats::OBSBasicStats(QWidget *parent, bool closable)
 		topLayout->addWidget(label, row++, col + 1);
 		QLabel *valueLabel = qobject_cast<QLabel *>(label);
 		if (!configKey.isEmpty() && valueLabel) {
-			RegisterStatRow(typeLabel, valueLabel, configKey,
-					displayName.isEmpty() ? name : displayName);
+			RegisterStatRow(typeLabel, valueLabel, configKey, displayName.isEmpty() ? name : displayName);
 		}
 	};
 
@@ -629,25 +668,27 @@ void OBSBasicStats::Update()
 		unsigned long long vramUsed = 0, vramTotal = 0;
 		unsigned int tempC = 0;
 
-		if (n.sampleUtilization(gpuPct))
+		if (n.sampleUtilization(gpuPct)) {
 			gpuUsage->setText(QString::number(gpuPct) + QStringLiteral("%"));
-		else
+		} else {
 			gpuUsage->setText(QStringLiteral("—"));
+		}
 		setClasses(gpuUsage, "");
 
 		if (n.sampleMemory(vramUsed, vramTotal) && vramTotal > 0) {
 			double usedGB = (double)vramUsed / (1024.0 * 1024.0 * 1024.0);
 			double totalGB = (double)vramTotal / (1024.0 * 1024.0 * 1024.0);
 			double ratio = (double)vramUsed / (double)vramTotal;
-			vramUsage->setText(QString("%1 / %2 GB")
-						   .arg(QString::number(usedGB, 'f', 1),
-							QString::number(totalGB, 'f', 1)));
-			if (ratio > 0.95)
+			vramUsage->setText(
+				QString("%1 / %2 GB")
+					.arg(QString::number(usedGB, 'f', 1), QString::number(totalGB, 'f', 1)));
+			if (ratio > 0.95) {
 				setClasses(vramUsage, "text-danger");
-			else if (ratio > 0.85)
+			} else if (ratio > 0.85) {
 				setClasses(vramUsage, "text-warning");
-			else
+			} else {
 				setClasses(vramUsage, "");
+			}
 		} else {
 			vramUsage->setText(QStringLiteral("—"));
 			setClasses(vramUsage, "");
@@ -655,12 +696,13 @@ void OBSBasicStats::Update()
 
 		if (n.sampleTemperature(tempC)) {
 			gpuTemp->setText(QString::number(tempC) + QStringLiteral(" °C"));
-			if (tempC > 85)
+			if (tempC > 85) {
 				setClasses(gpuTemp, "text-danger");
-			else if (tempC > 80)
+			} else if (tempC > 80) {
 				setClasses(gpuTemp, "text-warning");
-			else
+			} else {
 				setClasses(gpuTemp, "");
+			}
 		} else {
 			gpuTemp->setText(QStringLiteral("—"));
 			setClasses(gpuTemp, "");
@@ -933,8 +975,7 @@ void OBSBasicStats::hideEvent(QHideEvent *)
  * Default is true (visible) so a fresh config preserves the existing UX.
  * ------------------------------------------------------------------------- */
 
-void OBSBasicStats::RegisterStatRow(QLabel *name, QLabel *value, const QString &configKey,
-				    const QString &displayName)
+void OBSBasicStats::RegisterStatRow(QLabel *name, QLabel *value, const QString &configKey, const QString &displayName)
 {
 	StatRow row;
 	row.name = name;
@@ -952,10 +993,12 @@ void OBSBasicStats::ApplyStatVisibility()
 		QByteArray keyBytes = row.configKey.toUtf8();
 		config_set_default_bool(cfg, "Stats", keyBytes.constData(), true);
 		bool visible = config_get_bool(cfg, "Stats", keyBytes.constData());
-		if (row.name)
+		if (row.name) {
 			row.name->setVisible(visible);
-		if (row.value)
+		}
+		if (row.value) {
 			row.value->setVisible(visible);
+		}
 	}
 }
 
@@ -983,8 +1026,7 @@ void OBSBasicStats::Configure()
 		boxes.append(cb);
 	}
 
-	QDialogButtonBox *buttons =
-		new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+	QDialogButtonBox *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
 	layout->addWidget(buttons);
 	connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
 	connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);

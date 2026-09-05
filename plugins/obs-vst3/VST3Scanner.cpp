@@ -16,26 +16,31 @@
 ******************************************************************************/
 
 #include "VST3Scanner.h"
+#include "VST3HostApp.h"
 
 #include <PluginPathFingerprint.hpp>
 
 #include "public.sdk/source/vst/hosting/module.h"
-#include "public.sdk/source/vst/moduleinfo/moduleinfoparser.h"
+#include "public.sdk/source/vst/hosting/plugprovider.h"
+#include "pluginterfaces/vst/ivstaudioprocessor.h"
 
-#include "util/bmem.h"
-#include <util/platform.h>
+#include <util/base.h>
 
 #include <algorithm>
 #include <cwctype>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
-#include <unordered_map>
 #include <utility>
 
 namespace {
-constexpr int64_t MAX_MODULE_INFO_BYTES = 16LL * 1024LL * 1024LL;
 constexpr size_t MAX_PLUGIN_CLASSES = 10000;
+
+class ScannerPlugProvider : public Steinberg::Vst::PlugProvider {
+public:
+	using PlugProvider::PlugProvider;
+	bool setup(Steinberg::FUnknown *context) { return setupPlugin(context); }
+};
 
 bool hasAsciiControlCharacters(std::string_view text) noexcept
 {
@@ -282,100 +287,13 @@ void VST3Scanner::sort()
 	}
 }
 
-// try to load the moduleinfo.json when provided by VST3
-bool VST3Scanner::tryReadModuleInfo(const std::string &bundlePath)
-{
-	namespace fs = std::filesystem;
-
-	fs::path p(bundlePath);
-	fs::path bundleRoot;
-
-#ifdef _WIN32
-	if (!fs::is_regular_file(p)) {
-		return false;
-	}
-
-	// path is <bundleRoot>/Contents/Resources/moduleinfo.json
-	bundleRoot = p.parent_path().parent_path().parent_path();
-#else
-	if (!fs::is_directory(p)) {
-		return false;
-	}
-
-	bundleRoot = p;
-#endif
-
-	fs::path jsonPath = bundleRoot / "Contents" / "Resources" / "moduleinfo.json";
-
-	if (!fs::exists(jsonPath) || !fs::is_regular_file(jsonPath)) {
-		return false;
-	}
-
-	const std::string jsonPathUtf8 = jsonPath.u8string();
-	const int64_t jsonSize = os_get_file_size(jsonPathUtf8.c_str());
-	if (jsonSize <= 0 || jsonSize > MAX_MODULE_INFO_BYTES) {
-		return false;
-	}
-
-	char *jsonBuf = os_quick_read_utf8_file(jsonPathUtf8.c_str());
-	if (!jsonBuf) {
-		return false;
-	}
-
-	std::string json(jsonBuf);
-	bfree(jsonBuf);
-
-	auto parsed = Steinberg::ModuleInfoLib::parseJson(json, nullptr);
-	if (!parsed) {
-		return false;
-	}
-
-	bool discardable = parsed.value().factoryInfo.flags & Steinberg::PFactoryInfo::kClassesDiscardable;
-
-	if (discardable) {
-		return addModuleClasses(bundlePath);
-	}
-
-	return loadFromModuleInfo(*parsed, bundleRoot.u8string());
-}
-
-// load classes from moduleinfo.json
-bool VST3Scanner::loadFromModuleInfo(const Steinberg::ModuleInfo &info, const std::string &bundleRoot)
-{
-	const std::string pluginName = std::filesystem::u8path(bundleRoot).stem().u8string();
-	size_t added = 0;
-	bool discardable = info.factoryInfo.flags & Steinberg::PFactoryInfo::kClassesDiscardable;
-	for (const auto &c : info.classes) {
-		// We only accept audio effects, not MIDI nor instruments ...
-		if (c.category != kVstAudioEffectClass) {
-			continue;
-		}
-
-		VST3ClassInfo entry;
-		entry.id = c.cid;
-		entry.name = c.name;
-		entry.path = bundleRoot;
-		entry.pluginName = pluginName;
-		entry.discardable = discardable;
-
-		if (!vst3_validate_and_sanitize_class_info(entry) || pluginList.size() >= MAX_PLUGIN_CLASSES) {
-			continue;
-		}
-
-		pluginList.push_back(std::move(entry));
-		++classCount[bundleRoot];
-		++added;
-	}
-
-	return added > 0;
-}
-
-// load classes directly from binary; very close to previous function, a pity that factorization is not possible.
+// Called in the isolated scan worker. Metadata alone must never authorize a class.
 bool VST3Scanner::addModuleClasses(const std::string &bundlePath)
 {
 	std::string error;
 	const std::string pluginName = std::filesystem::u8path(bundlePath).stem().u8string();
 	size_t added = 0;
+	VST3HostApp host;
 	VST3::Hosting::Module::Ptr module;
 	try {
 		module = VST3::Hosting::Module::create(bundlePath, error);
@@ -396,6 +314,7 @@ bool VST3Scanner::addModuleClasses(const std::string &bundlePath)
 	}
 
 	VST3::Hosting::PluginFactory factory = module->getFactory();
+	factory.setHostContext(host.getFUnknown());
 	bool discardable = factory.info().classesDiscardable();
 	for (const auto &classInfo : factory.classInfos()) {
 		if (classInfo.category() == kVstAudioEffectClass) {
@@ -409,6 +328,20 @@ bool VST3Scanner::addModuleClasses(const std::string &bundlePath)
 			if (!vst3_validate_and_sanitize_class_info(entry) || pluginList.size() >= MAX_PLUGIN_CLASSES) {
 				continue;
 			}
+
+			{
+				ScannerPlugProvider provider(factory, classInfo, true);
+				if (!provider.setup(host.getFUnknown()) || !provider.getComponentPtr() ||
+				    !provider.getControllerPtr()) {
+					continue;
+				}
+				Steinberg::FUnknownPtr<Steinberg::Vst::IAudioProcessor> processor(
+					provider.getComponentPtr());
+				if (!processor || processor->canProcessSampleSize(Steinberg::Vst::kSample32) !=
+							  Steinberg::kResultTrue) {
+					continue;
+				}
+			} // Terminate successfully before publishing the approval.
 
 			pluginList.push_back(std::move(entry));
 			++classCount[bundlePath];
@@ -427,22 +360,15 @@ bool VST3Scanner::scanModule(const std::string &bundlePath)
 
 	const size_t firstAdded = pluginList.size();
 	try {
-		if (!(tryReadModuleInfo(bundlePath) || addModuleClasses(bundlePath))) {
-			return false;
-		}
-
-		std::unordered_map<std::string, PluginPathFingerprint> fingerprints;
-		for (size_t index = firstAdded; index < pluginList.size(); ++index) {
-			auto [iterator, inserted] = fingerprints.try_emplace(pluginList[index].path);
-			if (inserted && !plugin_path_fingerprint(pluginList[index].path, iterator->second)) {
-				pluginList.resize(firstAdded);
-				sort();
-				return false;
+		PluginPathFingerprint fingerprint;
+		if (plugin_path_fingerprint(bundlePath, fingerprint) && addModuleClasses(bundlePath) &&
+		    plugin_path_fingerprint_matches(bundlePath, fingerprint)) {
+			for (size_t index = firstAdded; index < pluginList.size(); ++index) {
+				pluginList[index].fileSize = fingerprint.size;
+				pluginList[index].sha256 = fingerprint.sha256;
 			}
-			pluginList[index].fileSize = iterator->second.size;
-			pluginList[index].sha256 = iterator->second.sha256;
+			return true;
 		}
-		return true;
 	} catch (const std::exception &error) {
 		const std::string message = vst3_sanitize_display_text(error.what());
 		blog(LOG_ERROR, "[VST3 Scanner] Skipping %s after an exception: %.1024s", bundlePath.c_str(),
@@ -450,10 +376,12 @@ bool VST3Scanner::scanModule(const std::string &bundlePath)
 	} catch (...) {
 		blog(LOG_ERROR, "[VST3 Scanner] Skipping %s after an unknown exception", bundlePath.c_str());
 	}
+	pluginList.resize(firstAdded);
+	sort();
 	return false;
 }
 
-// scan done by fully loading the module, very costly in time so this is done on a separate thread
+// Full module loading and initialization belongs in the isolated scanner process.
 bool VST3Scanner::scanForVST3Plugins()
 {
 	pluginList.clear();

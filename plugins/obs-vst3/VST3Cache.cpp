@@ -23,6 +23,8 @@
 namespace {
 constexpr int64_t MAX_CACHE_BYTES = 16LL * 1024LL * 1024LL;
 constexpr size_t MAX_CACHE_ENTRIES = 10000;
+// Version 2 permitted metadata-only approvals without initializing the binary.
+constexpr int64_t CACHE_VERSION = 3;
 } // namespace
 
 bool vst3_list_load_json(VST3Scanner &scanner, const char *path, bool safeBackup, bool includeDiscardable)
@@ -45,7 +47,7 @@ bool vst3_list_load_json(VST3Scanner &scanner, const char *path, bool safeBackup
 		return false;
 	}
 
-	if (obs_data_get_int(root, "version") != 2) {
+	if (obs_data_get_int(root, "version") != CACHE_VERSION) {
 		obs_data_release(root);
 		return false;
 	}
@@ -150,7 +152,7 @@ bool vst3_list_save_json(const VST3Scanner &scanner, const char *path, const cha
 		obs_data_release(object);
 	}
 
-	obs_data_set_int(root, "version", 2);
+	obs_data_set_int(root, "version", CACHE_VERSION);
 	obs_data_set_array(root, "plugins", plugins);
 	obs_data_array_release(plugins);
 

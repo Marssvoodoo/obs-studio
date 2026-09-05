@@ -28,6 +28,8 @@ target_sources(
     utility/MultitrackVideoOutput.cpp
     utility/MultitrackVideoOutput.hpp
     utility/NativeEventFilter.hpp
+    utility/NativeTelemetryGuard.cpp
+    utility/NativeTelemetryGuard.hpp
     utility/OBSCanvas.cpp
     utility/OBSCanvas.hpp
     utility/OBSEventFilter.hpp
