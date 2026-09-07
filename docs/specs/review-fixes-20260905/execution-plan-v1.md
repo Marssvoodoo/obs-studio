@@ -19,8 +19,8 @@ Scope: Stats telemetry call boundary, VST3 scanner and cache version, focused te
 2. [x] Implement telemetry fault containment and test normal/error/native-fault behavior.
 3. [x] Require VST3 binary/class initialization, invalidate old approvals, and add scanner integration coverage.
 4. [x] Run focused tests, full CTest, full RelWithDebInfo build, diff/security/format checks, and direct scanner checks.
-5. Review and commit explicit source/test/doc files; record the pushed SHA in the machine handoff outside this commit.
-6. [ ] Create a verified installation backup and deploy when OBS is inactive; verify installed hashes and a safe runtime path.
+5. [x] Review and commit explicit source/test/doc files; record the pushed SHA in the machine handoff outside this commit.
+6. [x] Create a verified installation backup and deploy when OBS is inactive; verify installed hashes and a safe runtime path.
 
 ## Deployment and rollback
 
@@ -47,6 +47,17 @@ Rollback is the pre-install binary backup plus the recorded parent commit. The s
 | `bin/64bit/obs-vst3-scanner.exe` | `2933A00E212C20E1872A8F6B6F78C7B8449C8995C7AD1A66FA2CE38F67F4CAA1` |
 | `obs-plugins/64bit/obs-vst3.dll` | `4FF478AC93ADA3B757142D9F4BA0A0577CEFAF2CF5BB10BEBAF305C156DC2BAB` |
 
-## Remaining activation boundary
+## Previous activation boundary (September 5)
 
 The installed OBS process remained streaming and recording during verification. Source fixes and a passing build do not establish that the installed process has loaded them. The guarded installer must wait for OBS to be closed. After activation, VST3 effects require a fresh scan because schema-2 approvals are intentionally rejected. The scanner validates load/initialization and supported sample format; it does not certify every DSP or editor operation in a third-party plugin. Windows was built and tested; other platforms were not built in this run.
+
+## Installation completed (September 7)
+
+Owner authorized updating local OBS with the prepared custom version. OBS was
+closed; the guarded administrator installer succeeded. Independent readback
+verified 2,185 installed payload files, 9,923 unchanged extra installation files,
+and 29 unchanged user configuration files. All 6 CTest cases pass, installed
+version-only startup passes, and the installed VST3 worker initializes the private
+Voodoo FX positive control with schema 3. OBS stays closed; a normal-profile/Stats
+UI check and production VST3 rescan remain operator steps before live use.
+See [installation-20260907.md](installation-20260907.md) for receipts and rollback.
