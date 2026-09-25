@@ -78,6 +78,9 @@ struct mp4_output {
 	size_t max_size;
 
 	int64_t start_time;
+	/* Presentation time of the current file's first keyframe. Chapters are
+	 * placed relative to it, while splitting measures from start_time (DTS). */
+	int64_t chapter_base_usec;
 	int64_t max_time;
 
 	/* Buffer for packets while we reinitialise the muxer after splitting */
@@ -152,7 +155,7 @@ void mp4_pkt_callback(obs_output_t *output, struct encoder_packet *pkt, struct e
 
 		/* Video frames can be out of order (b-frames), so instead of using the video packet's dts_usec we need to calculate
 		 * the chapter DTS from the frame's PTS (for chapters DTS == PTS). */
-		int64_t chap_dts_usec = (pkt->pts * 1000000 / pkt->timebase_den) - out->start_time;
+		int64_t chap_dts_usec = (pkt->pts * 1000000 / pkt->timebase_den) - out->chapter_base_usec;
 		int64_t chap_dts_msec = chap_dts_usec / 1000;
 		int64_t chap_dts_sec = chap_dts_msec / 1000;
 
@@ -293,6 +296,7 @@ static bool mp4_output_start(void *data)
 	out->allow_overwrite = obs_data_get_bool(settings, "allow_overwrite");
 	out->cur_size = 0;
 	out->start_time = 0;
+	out->chapter_base_usec = 0;
 	out->received_first_keyframe = false;
 
 	/* Get path */
@@ -454,6 +458,7 @@ static bool change_file(struct mp4_output *out, struct encoder_packet *pkt)
 
 	out->cur_size = 0;
 	out->start_time = pkt->dts_usec;
+	out->chapter_base_usec = packet_pts_usec(pkt);
 
 	return true;
 }
@@ -544,6 +549,7 @@ static void mp4_output_packet(void *data, struct encoder_packet *packet)
 	if (!out->received_first_keyframe && packet->type == OBS_ENCODER_VIDEO && packet->track_idx == 0 &&
 	    packet->keyframe) {
 		out->start_time = packet->dts_usec;
+		out->chapter_base_usec = packet_pts_usec(packet);
 		out->received_first_keyframe = true;
 	}
 
