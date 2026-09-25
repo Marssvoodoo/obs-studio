@@ -38,4 +38,13 @@ require_text("frontend/widgets/OBSBasicStats.cpp" "cuDeviceGetLuid" "selected-ad
 require_text("frontend/widgets/OBSBasicStats.cpp" "LOAD_LIBRARY_SEARCH_SYSTEM32" "system-only NVIDIA library loading")
 forbid_text("frontend/widgets/OBSBasicStats.cpp" "getHandle(0, &device)" "hard-coded NVML device zero")
 
+# Upstream backports (2026-09-24): keep them when merging a new upstream release.
+forbid_text("libobs/obs-audio.c" "bool tasks_remaining = true;" "audio tasks executed while holding task_mutex (upstream 4315559a0)")
+forbid_text("libobs/obs-video.c" "bool tasks_remaining = true;" "graphics tasks executed while holding task_mutex (upstream 4315559a0)")
+require_text("frontend/widgets/AudioMixer.cpp" "QByteArray cachedName = control->getCachedName().toUtf8();" "owned Audio Mixer log name (upstream 36d134ee9)")
+require_text("frontend/widgets/OBSBasic_Profiles.cpp" "// Ensure defaults and updates are saved to disk" "profile defaults saved after activation (upstream dfad5c86f)")
+require_text("plugins/obs-outputs/mp4-output.c" "out->received_first_keyframe = false;" "per-recording b-frame split start correction (upstream f89ad4bee)")
+require_text("plugins/obs-outputs/mp4-output.c" "current_runtime >= out->max_time - 1000LL" "one-sided 1 ms split tolerance")
+forbid_text("plugins/obs-outputs/mp4-output.c" "llabs(out->max_time - current_runtime) < 1000LL" "exact-match split window that never splits on non-dividing keyframe intervals")
+
 message(STATUS "OBS fork source contracts passed")
