@@ -30,8 +30,7 @@ Follow-ups from the post-merge review (every finding survived two skeptics):
 
 Noted, not changed (pre-existing upstream behaviour): `mp4_output_actual_stop`
 removes the packet callback with a NULL param, so callbacks accumulate across
-restarts of a reused output; the split buffer is not cleared on stop; upstream
-575c77f19 (keep the last packet when flushing a Hybrid file) is not in the fork.
+restarts of a reused output; the split buffer is not cleared on stop.
 
 ## Build and tests
 
@@ -57,3 +56,43 @@ restarts of a reused output; the split buffer is not cleared on stop; upstream
 OBS was left closed. A normal-profile start, streaming and Hybrid MP4 recording
 were not exercised in this session. Rollback, only on request and with OBS closed:
 copy the backup folder over the installation.
+
+## Addendum 2026-09-25: upstream 575c77f19
+
+`ad5983499` backports "obs-outputs: Do not drop last packet when flushing Hybrid
+file". The Hybrid MP4/MOV muxer dropped the last queued packet of every track when
+a file was finalised, so each split file lost its final frame. On the final flush
+(`next_frag_pts == 0`, which only `mp4_mux_finalise` produces) the last packet now
+reuses the previous sample's duration.
+
+**Fork adaptation:** the chapter track keeps `end_offset` 1. Its last packet is the
+end-of-file "Dummy" marker that only gives the previous chapter its duration;
+upstream verbatim would write it as an extra chapter that starts at the end of the
+recording and makes the chapter track longer than the movie. Upstream `master` has
+no later fix. Four independent reviewers (final-flush detection, chapter track,
+A/V durations, fork interaction) confirmed the bug in the fork, rejected the verbatim
+patch for that reason and found no problems with the adaptation.
+
+Not fixed, same as upstream: a track with exactly one packet in the final fragment
+(most likely all-intra video such as ProRes) still loses that packet, because there
+is no previous sample duration to reuse.
+
+- Source contracts pin the duration reuse and the chapter exclusion; a mutation run
+  confirmed both fail when reverted (including to upstream's verbatim line).
+- Build: 0 compiler warnings, 6/6 CTest.
+- Release `L:/Coding/_obs_releases/20260925-hybrid-last-packet/`: payload 2,185
+  files (manifest SHA-256 `AACB0EA00DA09507E5F71127CDD5274D268D15D2D0752902519F59B29333D493`);
+  only `obs-outputs.dll` and `.pdb` differ from the 2026-09-24 payload.
+- Backup of the previous installation (12,111 files, manifest SHA-256
+  `3AAF838E9CD7457BC36DF8B9A1D92445CED4037DFEBBC097DD1C1A52E38DA419`):
+  `L:/Coding/_obs_install_backup/obs-studio-pre-hybrid-last-packet-20260925/`.
+- Installer `L:/Coding/_turnover/obs-deploy-hybrid-last-packet-20260925.ps1` (only
+  roots, commit and manifest hashes changed from the 2026-09-24 installer).
+  Verify-only pass, then the elevated run on 2026-09-25 05:13 CDT with OBS closed;
+  robocopy exit 3.
+- Readback: 2,185/2,185 payload files match, 12,111 installed files, installed
+  `obs-outputs.dll` equals the build (`451EF0FFE7DBC728…`), `obs64.exe --version`
+  exits 0 with `OBS Studio - 32.2.2-perf`.
+
+A Hybrid MP4 recording was not exercised; the fix is verified by source review,
+build and tests only.
