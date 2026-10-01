@@ -2,6 +2,36 @@ add_executable(obs-fork-core-regressions core-regressions.c)
 target_include_directories(obs-fork-core-regressions PRIVATE "${CMAKE_SOURCE_DIR}/libobs")
 set_target_properties(obs-fork-core-regressions PROPERTIES FOLDER "tests")
 
+if(OS_WINDOWS AND TARGET obs-browser)
+  add_executable(obs-fork-browser-texture-regressions browser-texture-regressions.cpp)
+  target_include_directories(
+    obs-fork-browser-texture-regressions
+    PRIVATE "${CMAKE_SOURCE_DIR}/libobs" "${CMAKE_SOURCE_DIR}/plugins/obs-browser"
+  )
+  target_compile_definitions(obs-fork-browser-texture-regressions PRIVATE LIBOBS_EXPORTS)
+  set_target_properties(obs-fork-browser-texture-regressions PROPERTIES FOLDER "tests")
+  add_test(NAME obs-fork-browser-texture-regressions COMMAND obs-fork-browser-texture-regressions)
+
+  add_executable(obs-fork-browser-texture-gpu-regressions browser-texture-gpu-regressions.cpp)
+  target_include_directories(
+    obs-fork-browser-texture-gpu-regressions
+    PRIVATE "${CMAKE_SOURCE_DIR}/plugins/obs-browser"
+  )
+  target_link_libraries(obs-fork-browser-texture-gpu-regressions PRIVATE OBS::libobs d3d11 dxgi)
+  add_dependencies(obs-fork-browser-texture-gpu-regressions libobs-d3d11)
+  set_target_properties(obs-fork-browser-texture-gpu-regressions PROPERTIES FOLDER "tests")
+  add_test(
+    NAME obs-fork-browser-texture-gpu-regressions
+    COMMAND obs-fork-browser-texture-gpu-regressions "$<TARGET_FILE:libobs-d3d11>"
+  )
+  set_tests_properties(
+    obs-fork-browser-texture-gpu-regressions
+    PROPERTIES
+      TIMEOUT 30
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${CMAKE_BINARY_DIR}/rundir/$<CONFIG>/bin/64bit"
+  )
+endif()
+
 find_package(Qt6 REQUIRED Core)
 add_executable(
   obs-fork-telemetry-regressions
