@@ -33,9 +33,10 @@ tearing eliminated or an FPS improvement.
 - [x] Observe focused tests and a real graphics probe; run full CTest/build.
 - [x] Review diff, formatting and changed-file credential/size sweep.
 - [x] Publish the browser commit to an owner fork and pin it in the parent fork.
-- [ ] Commit/push the parent and verify its remote hash; record the release receipt.
+- [x] Commit/push the parent and verify its remote hash; record the release receipt.
 - [x] Prepare a hash-pinned replacement for obs-browser.dll and rollback copy.
-- [ ] Install only after OBS is closed, verifying installed bytes and runtime.
+- [x] Install only after OBS is closed and verify installed bytes.
+- [ ] Review live browser-source visuals after the owner reopens OBS.
 
 ## Deployment boundaries
 
@@ -74,10 +75,19 @@ Source: https://github.com/obsproject/obs-browser/pull/531
   `363C5233471978A233CE24E542659D4AC3F96865DD45AA0030D3A88A603AA1E7`.
   Exact original files are backed up under
   `L:\Coding\_obs_install_backup\obs-browser-pre-pooled-texture-20260930`.
-- `tools/obs-install-browser-pooled-texture.ps1` syntax and read-only preflight
-  pass. The OBS-open guard returns 20 before writes; installed original hashes
-  remain unchanged. Run elevated after closing OBS; `-Rollback` restores the
+- At staging, `tools/obs-install-browser-pooled-texture.ps1` syntax and read-only
+  preflight passed. The OBS-open guard returned 20 before writes; installed
+  original hashes were unchanged. Run elevated after closing OBS; `-Rollback` restores the
   same two original files. No CEF, configuration, scenes or other plugins change.
-- OBS PID 467596 is still open, so installation and live visual QA are pending.
-  Final publication hashes and activation instructions belong to the release
-  receipt and `L:\Coding\_turnover\STATUS.md`, outside the source commit.
+- Source repair parent commit `cc3f3ee32c6986b141345ff23a9222a4648eea6c`
+  was pushed and its remote hash verified. The immutable staging receipt remains
+  a snapshot of that commit; this document records the later installation.
+- Owner closed OBS and authorized installation. Elevated installer PID 529576
+  exited 0 at 2026-10-01 01:21:05 UTC (Sep30 20:21 CDT). Installed DLL/PDB hashes
+  match the pinned manifest. Original rollback, obs.dll, libobs-d3d11.dll and
+  libcef.dll hashes remain verified. No OBS process was running after install.
+- Installation proof:
+  `L:\Coding\_obs_releases\20260930-browser-pooled-texture\installation-verification-20261001.json`,
+  SHA256 `F78BD371ABA8E6F1F396ACA101C2D3169FEF934DF46D3CC15F3E56EC8B685D36`.
+  OBS was not relaunched. Live animated browser-source visual QA remains pending;
+  installation does not establish visible tearing eliminated or an FPS gain.
