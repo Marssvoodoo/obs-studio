@@ -67,12 +67,10 @@ public:
 	};
 
 private:
-	std::unique_ptr<idian::Utils> utils;
-
 	OBSWeakSource weakSource_;
 	const char *uuid;
 	std::vector<OBSSignal> obsSignals;
-	obs_monitoring_type obsMonitoringType;
+	bool obsMonitoring;
 	bool obsMuted;
 
 	QBoxLayout *mainLayout;
@@ -124,7 +122,7 @@ private:
 	bool eventFilter(QObject *watched, QEvent *event) override;
 
 	void setMuted(bool mute);
-	void setMonitoring(obs_monitoring_type type);
+	void setMonitoring(bool enabled);
 
 public slots:
 	void setUseDisabledColors(bool greyscale);
@@ -143,7 +141,7 @@ private slots:
 
 	void onSourceActiveChanged(bool active);
 	void onMuteChanged(bool muted);
-	void onMonitoringChanged(int type);
+	void onMonitoringChanged(bool enabled);
 	void onSourceDestroyed() { deleteLater(); }
 
 signals:

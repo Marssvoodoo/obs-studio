@@ -704,15 +704,11 @@ static inline bool should_silence_monitored_source(obs_source_t *source, struct 
 	if (!dup_src || !obs_source_active(dup_src))
 		return false;
 
-	if (dup_src->monitoring_type == OBS_MONITORING_TYPE_MONITOR_ONLY)
-		return false;
-
 	bool fader_muted = close_float(dup_src->volume, 0.0f, 0.0001f);
 	bool output_capture_unmuted = !dup_src->muted && !fader_muted;
 
 	if (output_capture_unmuted) {
-		if (source->monitoring_type == OBS_MONITORING_TYPE_MONITOR_AND_OUTPUT &&
-		    source != dup_src) {
+		if (source->monitoring_enabled && source != dup_src) {
 			return true;
 		}
 	}

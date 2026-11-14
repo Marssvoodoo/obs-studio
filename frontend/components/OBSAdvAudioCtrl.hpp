@@ -41,7 +41,7 @@ private:
 	QPointer<QLabel> labelL;
 	QPointer<QLabel> labelR;
 	QPointer<QSpinBox> syncOffset;
-	QPointer<QComboBox> monitoringType;
+	QPointer<QCheckBox> monitoringCheckBox;
 	QPointer<QCheckBox> mixer1;
 	QPointer<QCheckBox> mixer2;
 	QPointer<QCheckBox> mixer3;
@@ -57,7 +57,7 @@ private:
 	static void OBSSourceFlagsChanged(void *param, calldata_t *calldata);
 	static void OBSSourceVolumeChanged(void *param, calldata_t *calldata);
 	static void OBSSourceSyncChanged(void *param, calldata_t *calldata);
-	static void OBSSourceMonitoringTypeChanged(void *param, calldata_t *calldata);
+	static void OBSSourceMonitoringChanged(void *param, calldata_t *calldata);
 	static void OBSSourceMixersChanged(void *param, calldata_t *calldata);
 	static void OBSSourceMixLevelChanged(void *param, calldata_t *calldata);
 	static void OBSSourceBalanceChanged(void *param, calldata_t *calldata);
@@ -78,7 +78,7 @@ public slots:
 	void SourceFlagsChanged(uint32_t flags);
 	void SourceVolumeChanged(float volume);
 	void SourceSyncChanged(int64_t offset);
-	void SourceMonitoringTypeChanged(int type);
+	void SourceMonitoringChanged(bool enabled);
 	void SourceMixersChanged(uint32_t mixers);
 	void SourceMixLevelChanged(int mixer, float level);
 	void SourceBalanceChanged(int balance);
@@ -89,7 +89,7 @@ public slots:
 	void downmixMonoChanged(bool checked);
 	void balanceChanged(int val);
 	void syncOffsetChanged(int milliseconds);
-	void monitoringTypeChanged(int index);
 	void audioMixLevelChanged(int mixer, double db);
+	void monitoringChanged(bool enabled);
 	void ResetBalance();
 };

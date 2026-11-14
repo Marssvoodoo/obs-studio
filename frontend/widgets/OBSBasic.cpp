@@ -234,6 +234,7 @@ void obs_basic_perf_export_shutdown()
 #include <settings/OBSBasicSettings.hpp>
 #include <utility/QuickTransition.hpp>
 #include <utility/SceneRenameDelegate.hpp>
+#include <utility/ScreenshotObj.hpp>
 #if defined(_WIN32) || defined(WHATSNEW_ENABLED)
 #include <utility/WhatsNewInfoThread.hpp>
 #endif
@@ -254,16 +255,12 @@ void obs_basic_perf_export_shutdown()
 #include <QWidgetAction>
 
 #include <mutex>
-#ifdef _WIN32
 #include <sstream>
-#endif
 #include <string>
-#include <unordered_set>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include "Windows.h"
-#include <ShlObj.h>
 #endif
 
 #include "moc_OBSBasic.cpp"
@@ -304,191 +301,6 @@ extern void CheckExistingCookieId();
 
 namespace {
 std::once_flag saveOnceFlag;
-}
-
-static void AddExtraModulePaths()
-{
-	string plugins_path, plugins_data_path;
-	char *s;
-
-	s = getenv("OBS_PLUGINS_PATH");
-	if (s) {
-		plugins_path = s;
-	}
-
-	s = getenv("OBS_PLUGINS_DATA_PATH");
-	if (s) {
-		plugins_data_path = s;
-	}
-
-	if (!plugins_path.empty() && !plugins_data_path.empty()) {
-		/* Reject paths with traversal SEGMENTS or UNC / device-path
-		 * prefixes to prevent env-var-based DLL injection. Substring
-		 * "find(..)" rejected legitimate folders containing the
-		 * sequence in a name (e.g. "v1..2-beta"); switch to segment-
-		 * aware checks. */
-		auto path_looks_safe = [](const string &p) {
-			if (p.size() >= 4 &&
-			    p[0] == '\\' && p[1] == '\\' &&
-			    (p[2] == '?' || p[2] == '.') && p[3] == '\\')
-				return false; /* \\?\ or \\.\ device-path */
-			if (p.size() >= 2 &&
-			    ((p[0] == '\\' && p[1] == '\\') ||
-			     (p[0] == '/' && p[1] == '/')))
-				return false; /* UNC */
-			/* Walk segments delimited by / or \ — reject "..". */
-			size_t start = 0;
-			for (size_t i = 0; i <= p.size(); i++) {
-				const bool sep = (i == p.size() ||
-						  p[i] == '/' || p[i] == '\\');
-				if (!sep)
-					continue;
-				const size_t seg_len = i - start;
-				if (seg_len == 2 && p[start] == '.' &&
-				    p[start + 1] == '.')
-					return false;
-				start = i + 1;
-			}
-			return true;
-		};
-		if (!path_looks_safe(plugins_path) ||
-		    !path_looks_safe(plugins_data_path)) {
-			blog(LOG_WARNING,
-			     "OBS_PLUGINS_PATH rejected (unsafe path)");
-		} else {
-#if defined(__APPLE__)
-			plugins_path += "/%module%.plugin/Contents/MacOS";
-			plugins_data_path +=
-				"/%module%.plugin/Contents/Resources";
-			obs_add_module_path(plugins_path.c_str(),
-					    plugins_data_path.c_str());
-#else
-			string data_path_with_module_suffix;
-			data_path_with_module_suffix += plugins_data_path;
-			data_path_with_module_suffix += "/%module%";
-			obs_add_module_path(
-				plugins_path.c_str(),
-				data_path_with_module_suffix.c_str());
-#endif
-		}
-	}
-
-#if defined(_WIN32)
-	/* Search the standard OBS Studio installation directory so that
-	   third-party plugins are available in development builds.
-	   Uses SHGetKnownFolderPath instead of GetEnvironmentVariable to
-	   avoid env-var manipulation attacks. */
-	{
-		PWSTR pf_wide = nullptr;
-		HRESULT hr = SHGetKnownFolderPath(FOLDERID_ProgramFiles,
-						  0, nullptr, &pf_wide);
-		if (SUCCEEDED(hr) && pf_wide) {
-			int len = WideCharToMultiByte(CP_UTF8, 0, pf_wide,
-						      -1, nullptr, 0,
-						      nullptr, nullptr);
-			if (len > 0) {
-				string pf((size_t)(len - 1), '\0');
-				WideCharToMultiByte(CP_UTF8, 0, pf_wide, -1,
-						    &pf[0], len, nullptr,
-						    nullptr);
-				string std_bin =
-					pf + "/obs-studio/obs-plugins/64bit";
-				string std_data =
-					pf +
-					"/obs-studio/data/obs-plugins/%module%";
-				obs_add_module_path(std_bin.c_str(),
-						    std_data.c_str());
-			}
-			CoTaskMemFree(pf_wide);
-		}
-	}
-#endif
-
-	if (portable_mode) {
-		return;
-	}
-
-	char base_module_dir[512];
-#if defined(_WIN32)
-	int ret = GetProgramDataPath(base_module_dir, sizeof(base_module_dir), "obs-studio/plugins/%module%");
-#elif defined(__APPLE__)
-	int ret = GetAppConfigPath(base_module_dir, sizeof(base_module_dir), "obs-studio/plugins/%module%.plugin");
-#else
-	int ret = GetAppConfigPath(base_module_dir, sizeof(base_module_dir), "obs-studio/plugins/%module%");
-#endif
-
-	if (ret <= 0) {
-		return;
-	}
-
-	string path = base_module_dir;
-#if defined(__APPLE__)
-	/* User Application Support Search Path */
-	obs_add_module_path((path + "/Contents/MacOS").c_str(), (path + "/Contents/Resources").c_str());
-
-#ifndef __aarch64__
-	/* Legacy System Library Search Path */
-	char system_legacy_module_dir[PATH_MAX];
-	GetProgramDataPath(system_legacy_module_dir, sizeof(system_legacy_module_dir), "obs-studio/plugins/%module%");
-	std::string path_system_legacy = system_legacy_module_dir;
-	obs_add_module_path((path_system_legacy + "/bin").c_str(), (path_system_legacy + "/data").c_str());
-
-	/* Legacy User Application Support Search Path */
-	char user_legacy_module_dir[PATH_MAX];
-	GetAppConfigPath(user_legacy_module_dir, sizeof(user_legacy_module_dir), "obs-studio/plugins/%module%");
-	std::string path_user_legacy = user_legacy_module_dir;
-	obs_add_module_path((path_user_legacy + "/bin").c_str(), (path_user_legacy + "/data").c_str());
-#endif
-#else
-#if ARCH_BITS == 64
-	obs_add_module_path((path + "/bin/64bit").c_str(), (path + "/data").c_str());
-#else
-	obs_add_module_path((path + "/bin/32bit").c_str(), (path + "/data").c_str());
-#endif
-#endif
-}
-
-/* First-party modules considered to be potentially unsafe to load in Safe Mode
- * due to them allowing external code (e.g. scripts) to modify OBS's state. */
-static const unordered_set<string> unsafe_modules = {
-	"frontend-tools", // Scripting
-	"obs-websocket",  // Allows outside modifications
-};
-
-static void SetSafeModuleNames()
-{
-#ifndef SAFE_MODULES
-	return;
-#else
-	string module;
-	stringstream modules_(SAFE_MODULES);
-
-	while (getline(modules_, module, '|')) {
-		/* When only disallowing third-party plugins, still add
-		 * "unsafe" bundled modules to the safe list. */
-		if (disable_3p_plugins || !unsafe_modules.count(module)) {
-			obs_add_safe_module(module.c_str());
-		}
-	}
-#endif
-}
-
-static void SetCoreModuleNames()
-{
-#ifndef SAFE_MODULES
-	throw "SAFE_MODULES not defined";
-#else
-	std::string safeModules = SAFE_MODULES;
-	if (safeModules.empty()) {
-		throw "SAFE_MODULES is empty";
-	}
-	string module;
-	stringstream modules_(SAFE_MODULES);
-
-	while (getline(modules_, module, '|')) {
-		obs_add_core_module(module.c_str());
-	}
-#endif
 }
 
 extern void setupDockAction(QDockWidget *dock);
@@ -1316,14 +1128,14 @@ void OBSBasic::InitOBSCallbacks()
 	signalHandlers.emplace_back(
 		obs_get_signal_handler(), "source_filter_add",
 		[](void *data, calldata_t *) {
-			QMetaObject::invokeMethod(static_cast<OBSBasic *>(data), "UpdateEditMenu",
+			QMetaObject::invokeMethod(static_cast<OBSBasic *>(data), &OBSBasic::UpdateEditMenu,
 						  Qt::QueuedConnection);
 		},
 		this);
 	signalHandlers.emplace_back(
 		obs_get_signal_handler(), "source_filter_remove",
 		[](void *data, calldata_t *) {
-			QMetaObject::invokeMethod(static_cast<OBSBasic *>(data), "UpdateEditMenu",
+			QMetaObject::invokeMethod(static_cast<OBSBasic *>(data), &OBSBasic::UpdateEditMenu,
 						  Qt::QueuedConnection);
 		},
 		this);
@@ -1419,27 +1231,15 @@ void OBSBasic::OBSInit()
 #if defined(_WIN32) && !defined(_DEBUG)
 	LoadLibraryW(L"Qt6Network");
 #endif
-	struct obs_module_failure_info mfi;
-
-	// Safe Mode disables third-party plugins so we don't need to add each path outside the OBS bundle/installation.
-	if (safe_mode || disable_3p_plugins) {
-		SetSafeModuleNames();
-	} else {
-		AddExtraModulePaths();
-	}
-
-	// Core modules are not allowed to be disabled by the user via plugin manager.
-	SetCoreModuleNames();
-
-	/* Modules can access frontend information (i.e. profile and scene collection data) during their initialization, and some modules (e.g. obs-websockets) are known to use the filesystem location of the current profile in their own code.
-
-     Thus the profile and scene collection discovery needs to happen before any access to that information (but after initializing global settings) to ensure legacy code gets valid path information.
-     */
+	// Modules can access frontend information (i.e., profile and scene collection data) during their initialization,
+	// and some modules (e.g., obs-websockets) are known to use the filesystem location of the current profile in their
+	// own code.
+	//
+	// Thus, the profile and scene collection discovery needs to happen before any access to that information happens,
+	// but after initializing global settings, to ensure legacy code gets valid path information.
 	RefreshSceneCollections(true);
 
-	App()->loadAppModules(mfi);
-
-	BPtr<char *> failed_modules = mfi.failed_modules;
+	App()->loadAppModules();
 
 #ifdef BROWSER_AVAILABLE
 	cef = obs_browser_init_panel();
@@ -1533,10 +1333,9 @@ void OBSBasic::OBSInit()
 	previewEnabled = config_get_bool(App()->GetUserConfig(), "BasicWindow", "PreviewEnabled");
 
 	if (!previewEnabled && !IsPreviewProgramMode()) {
-		QMetaObject::invokeMethod(this, "EnablePreviewDisplay", Qt::QueuedConnection,
-					  Q_ARG(bool, previewEnabled));
+		QMetaObject::invokeMethod(this, &OBSBasic::EnablePreviewDisplay, Qt::QueuedConnection, previewEnabled);
 	} else if (!previewEnabled && IsPreviewProgramMode()) {
-		QMetaObject::invokeMethod(this, "EnablePreviewDisplay", Qt::QueuedConnection, Q_ARG(bool, true));
+		QMetaObject::invokeMethod(this, &OBSBasic::EnablePreviewDisplay, Qt::QueuedConnection, true);
 	}
 
 	disableSaving--;
@@ -1683,7 +1482,7 @@ void OBSBasic::OBSInit()
 	}
 
 	if (!first_run && !has_last_version && !Active()) {
-		QMetaObject::invokeMethod(this, "on_autoConfigure_triggered", Qt::QueuedConnection);
+		QMetaObject::invokeMethod(this, &OBSBasic::on_autoConfigure_triggered, Qt::QueuedConnection);
 	}
 
 #if (defined(_WIN32) || defined(__APPLE__)) && (OBS_RELEASE_CANDIDATE > 0 || OBS_BETA > 0)
@@ -1764,22 +1563,7 @@ void OBSBasic::OBSInit()
 		activateWindow();
 	}
 
-	/* ------------------------------------------- */
-	/* display warning message for failed modules  */
-
-	if (mfi.count) {
-		QString failed_plugins;
-
-		char **plugin = mfi.failed_modules;
-		while (*plugin) {
-			failed_plugins += *plugin;
-			failed_plugins += "\n";
-			plugin++;
-		}
-
-		QString failed_msg = QTStr("PluginsFailedToLoad.Text").arg(failed_plugins);
-		OBSMessageBox::warning(this, QTStr("PluginsFailedToLoad.Title"), failed_msg);
-	}
+	App()->handlePluginLoadState();
 }
 
 void OBSBasic::OnFirstLoad()
@@ -2526,9 +2310,9 @@ void OBSBasic::closeWindow()
 
 	emit mainWindowClosed();
 
-	QMetaObject::invokeMethod(App(), "quit", Qt::QueuedConnection);
+	QMetaObject::invokeMethod(App(), &OBSApp::quit, Qt::QueuedConnection);
 #else
-	QMetaObject::invokeMethod(App(), "quit", Qt::QueuedConnection);
+	QMetaObject::invokeMethod(App(), &OBSApp::quit, Qt::QueuedConnection);
 #endif
 }
 

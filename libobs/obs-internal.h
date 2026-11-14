@@ -137,6 +137,8 @@ struct obs_module {
 	DARRAY(char *) outputs;
 	DARRAY(char *) encoders;
 	DARRAY(char *) services;
+
+	enum obs_runtime_module_type module_type;
 };
 
 struct obs_disabled_module {
@@ -158,6 +160,7 @@ extern void free_module(struct obs_module *mod);
 struct obs_module_path {
 	char *bin;
 	char *data;
+	enum obs_runtime_module_type type;
 };
 
 static inline void free_module_path(struct obs_module_path *omp)
@@ -585,6 +588,8 @@ struct obs_core_hotkeys {
 	char *push_to_talk;
 	char *sceneitem_show;
 	char *sceneitem_hide;
+	char *monitor_on;
+	char *monitor_off;
 };
 
 typedef DARRAY(struct obs_source_info) obs_source_info_array_t;
@@ -596,7 +601,6 @@ struct obs_core {
 	DARRAY(struct obs_module_path) module_paths;
 	DARRAY(char *) safe_modules;
 	DARRAY(char *) disabled_modules;
-	DARRAY(char *) core_modules;
 
 	obs_source_info_array_t source_types;
 	obs_source_info_array_t input_types;
@@ -624,6 +628,8 @@ struct obs_core {
 	os_task_queue_t *destruction_task_thread;
 
 	obs_task_handler_t ui_task_handler;
+
+	bool core_modules_loaded;
 };
 
 extern struct obs_core *obs;
@@ -1062,6 +1068,8 @@ struct obs_source {
 	/* audio monitoring */
 	struct audio_monitor *monitor;
 	enum obs_monitoring_type monitoring_type;
+	bool monitoring_enabled;
+	obs_hotkey_pair_id monitor_on_off_key;
 
 	/* media action queue */
 	DARRAY(struct media_action) media_actions;
