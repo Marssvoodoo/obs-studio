@@ -60,4 +60,14 @@ require_text("plugins/obs-outputs/mp4-mux.c" "const size_t end_offset = (final_f
 require_text("plugins/obs-outputs/mp4-output.c" "current_runtime >= out->max_time - 1000LL" "one-sided 1 ms split tolerance")
 forbid_text("plugins/obs-outputs/mp4-output.c" "llabs(out->max_time - current_runtime) < 1000LL" "exact-match split window that never splits on non-dividing keyframe intervals")
 
+# Fork behaviour re-ported onto upstream 33.0 structures (2026-11-14): keep it when merging a new upstream release.
+require_text("frontend/plugin-manager/PluginModuleLoader_Windows.cpp" "!isSafePluginPath(userPluginPath)" "unsafe OBS_PLUGINS_PATH override rejected")
+require_text("frontend/plugin-manager/PluginModuleLoader_Windows.cpp" "!isSafePluginPath(userPluginPath) || !isSafePluginPath(userDataPath)" "unsafe legacy plugin path override rejected")
+require_text("frontend/plugin-manager/PluginModuleLoader_Windows.cpp" "SHGetKnownFolderPath(FOLDERID_ProgramFiles" "shell-resolved Program Files legacy plugin search path")
+require_text("frontend/plugin-manager/PluginManagerWindow.cpp" "ui->stackedContents->insertWidget(ui->sectionList->row(audioSection), audioScanPanel);" "audio plug-in scanner hosted as a Plugin Manager page")
+require_text("plugins/obs-browser/browser-client.cpp" "CopyBrowserSharedTexture(bs->texture, shared," "CEF pooled frame copied before the paint callback returns")
+forbid_text("plugins/obs-browser/browser-client.cpp" "bs->last_handle = info.shared_texture_handle;" "CEF pooled handle retained after the paint callback")
+require_text("libobs/obs-audio.c" "if (source->monitoring_enabled && source != dup_src) {" "duplicate-monitoring silence follows monitoring_enabled on the snapshotted source")
+require_text("plugins/CMakeLists.txt" "add_core_module(obs-vst3 PLATFORMS WINDOWS)" "VST3 host built as a core module")
+
 message(STATUS "OBS fork source contracts passed")
