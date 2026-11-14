@@ -31,6 +31,9 @@ using ModuleList = std::vector<std::string>;
 inline constexpr std::string_view kPathVariable{"OBS_PLUGINS_PATH"};
 inline constexpr std::string_view kLegacyBinaryPathVariable{"OBS_LEGACY_PLUGINS_PATH"};
 inline constexpr std::string_view kLegacyDataPathVariable{"OBS_LEGACY_PLUGINS_DATA_PATH"};
+/* Fork compatibility: before 33.0 the legacy override pair was OBS_PLUGINS_PATH + OBS_PLUGINS_DATA_PATH. Plugin
+ * installers (e.g. StreamFX) still set that pair machine-wide. */
+inline constexpr std::string_view kPre33DataPathVariable{"OBS_PLUGINS_DATA_PATH"};
 
 inline std::string getEnvironmentVariable(std::string_view variableName)
 {

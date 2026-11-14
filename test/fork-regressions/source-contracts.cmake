@@ -69,5 +69,7 @@ require_text("plugins/obs-browser/browser-client.cpp" "CopyBrowserSharedTexture(
 forbid_text("plugins/obs-browser/browser-client.cpp" "bs->last_handle = info.shared_texture_handle;" "CEF pooled handle retained after the paint callback")
 require_text("libobs/obs-audio.c" "if (source->monitoring_enabled && source != dup_src) {" "duplicate-monitoring silence follows monitoring_enabled on the snapshotted source")
 require_text("plugins/CMakeLists.txt" "add_core_module(obs-vst3 PLATFORMS WINDOWS)" "VST3 host built as a core module")
+require_text("frontend/plugin-manager/PluginModuleLoader_Windows.cpp" "userDataPath = getEnvironmentVariable(kPre33DataPathVariable);" "pre-33.0 OBS_PLUGINS_PATH/OBS_PLUGINS_DATA_PATH pair still loads legacy plugins")
+require_text("frontend/plugin-manager/PluginModuleLoader.hpp" "kPre33DataPathVariable{\"OBS_PLUGINS_DATA_PATH\"}" "pre-33.0 data path variable name")
 
 message(STATUS "OBS fork source contracts passed")

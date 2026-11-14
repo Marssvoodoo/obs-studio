@@ -148,6 +148,12 @@ State PluginManager::loadPlugins(bool usePortableMode)
 	State userPluginState = State::Failure;
 	std::string userPluginPath = getEnvironmentVariable(kPathVariable);
 
+	/* With the pre-33.0 data variable present, OBS_PLUGINS_PATH is half of the old legacy pair (handled in
+	 * loadLegacyPlugins), not a 33.0-layout plugin root. */
+	if (!getEnvironmentVariable(kPre33DataPathVariable).empty()) {
+		userPluginPath.clear();
+	}
+
 	if (!userPluginPath.empty() && !isSafePluginPath(userPluginPath)) {
 		blog(LOG_WARNING, "%s rejected (unsafe path)", kPathVariable.data());
 		userPluginState = State::Success;
@@ -184,6 +190,11 @@ State PluginManager::loadLegacyPlugins(bool usePortableMode)
 
 	std::string userPluginPath = getEnvironmentVariable(kLegacyBinaryPathVariable);
 	std::string userDataPath = getEnvironmentVariable(kLegacyDataPathVariable);
+
+	if (userPluginPath.empty() && userDataPath.empty()) {
+		userPluginPath = getEnvironmentVariable(kPathVariable);
+		userDataPath = getEnvironmentVariable(kPre33DataPathVariable);
+	}
 
 	if (!userPluginPath.empty() && !userDataPath.empty() &&
 	    (!isSafePluginPath(userPluginPath) || !isSafePluginPath(userDataPath))) {
